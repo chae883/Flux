@@ -3,6 +3,7 @@ import os
 import platform
 import re
 import datetime
+import config  # Updated config loader
 
 # ------------------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -44,7 +45,7 @@ def script_version_up_wrapper():
         nuke.message(f"Error:\n{e}")
 
 # ------------------------------------------------------------------------------
-# CORE LOGIC (THE BRAIN)
+# CORE LOGIC
 # ------------------------------------------------------------------------------
 
 def update_flux_write(node=None):
@@ -146,10 +147,12 @@ def update_flux_write(node=None):
 
     # --- Directories ---
     render_dir = "[file dirname [value root.name]]/../renders"
+    
+    # ConfigからTempパスを取得
     if platform.system() == 'Windows':
-        temp_root = os.getenv('TEMP').replace('\\', '/') if os.getenv('TEMP') else 'C:/Temp'
+        temp_root = config.TEMP_WINDOWS
     else:
-        temp_root = '/tmp'
+        temp_root = config.TEMP_LINUX
 
     # --- Burn-in Control ---
     if is_mov and use_burnin:
@@ -166,7 +169,6 @@ def update_flux_write(node=None):
         available_cs = []
 
     def set_colorspace_smart(target_value, fallback_keywords=[]):
-        """ colorspaceモード用の設定関数 """
         if target_value:
             try:
                 if "color_picking" not in target_value:
@@ -191,28 +193,27 @@ def update_flux_write(node=None):
     # --- Root Settings ---
     root = nuke.root()
     root_working = root['workingSpaceLUT'].value() 
-    # monitorLutはDisplayモードでは使わない可能性があるが、念のため保持
 
     # --------------------------------------------------------------------------
-    # 3. APPLY SETTINGS
+    # 3. APPLY SETTINGS (FROM CONFIG)
     # --------------------------------------------------------------------------
 
     # === MODE: Master (EXR) ===
     if mode == 'Master (EXR)':
-        # ■ EXRは Colorspace モードで出力 (Linear / ACEScg)
         w['transformType'].setValue('colorspace')
         
         path = f"{render_dir}/{final_name_str}/{final_name_str}.%04d.exr"
         w['file'].setValue(path)
         
+        # ConfigからEXR設定を適用
+        exr_settings = config.RENDER_EXR
         w['file_type'].setValue('exr')
-        w['datatype'].setValue('32 bit float')
-        w['compression'].setValue('Zip (1 scanline)')
+        w['datatype'].setValue(exr_settings.get('datatype', '32 bit float'))
+        w['compression'].setValue(exr_settings.get('compression', 'Zip (1 scanline)'))
         w['metadata'].setValue('all metadata')
         w['views'].setValue('main')
         w['channels'].setValue('rgb')
         
-        # Colorspace設定
         linear_candidates = ['default', 'scene_linear', 'ACES - ACEScg', 'ACEScg']
         set_colorspace_smart(root_working, linear_candidates)
         
@@ -220,31 +221,28 @@ def update_flux_write(node=None):
 
     # === MODE: Review (MOV) ===
     elif mode == 'Review (MOV)':
-        # ■ MOVは Display モードで出力 (sRGB - Display / ACES 1.0 - SDR Video)
         w['transformType'].setValue('display')
         
         path = f"{render_dir}/dailies/{final_name_str}.mov"
         w['file'].setValue(path)
         w['file_type'].setValue('mov')
         
-        # Codec Settings
+        # ConfigからMOV設定を適用
+        mov_settings = config.RENDER_MOV
         try:
-            w['mov64_codec'].setValue('appr')
-            w['mov_prores_codec_profile'].setValue('ProRes 4:4:4:4 XQ 12-bit')
-            w['mov_h264_codec_profile'].setValue('High 4:2:0 8-bit')
-            w['mov64_quality'].setValue('High')
+            w['mov64_codec'].setValue(mov_settings.get('codec', 'appr'))
+            w['mov_prores_codec_profile'].setValue(mov_settings.get('prores_profile', 'ProRes 4:4:4:4 XQ 12-bit'))
+            w['mov_h264_codec_profile'].setValue(mov_settings.get('h264_profile', 'High 4:2:0 8-bit'))
+            w['mov64_quality'].setValue(mov_settings.get('quality', 'High'))
         except: pass
             
         w['views'].setValue('main')
         w['channels'].setValue('rgb')
 
-        # OCIO Display / View 設定
-        # ログに基づいて設定
         try:
             w['ocioDisplay'].setValue('sRGB - Display')
             w['ocioView'].setValue('ACES 1.0 - SDR Video')
         except:
-            # 万が一名前が違う場合の保険 (Standard sRGBなど)
             try:
                 w['ocioDisplay'].setValue('sRGB')
                 w['ocioView'].setValue('sRGB')
@@ -254,21 +252,22 @@ def update_flux_write(node=None):
 
     # === MODE: Temp (JPG) ===
     elif mode == 'Temp (JPG)':
-        # ■ JPGも Display モードで出力
         w['transformType'].setValue('display')
         
         path = f"{temp_root}/nuke_temp/{script_name}/{script_name}{final_suffix_str}.%04d.jpg"
         w['file'].setValue(path)
         w['file_type'].setValue('jpeg')
+        
+        # ConfigからJPG設定を適用
+        jpg_settings = config.RENDER_JPG
         try:
-            w['_jpeg_quality'].setValue(1.0)
-            w['_jpeg_sub_sampling'].setValue('4:4:4')
+            w['_jpeg_quality'].setValue(jpg_settings.get('quality', 1.0))
+            w['_jpeg_sub_sampling'].setValue(jpg_settings.get('sub_sampling', '4:4:4'))
         except: pass
             
         w['views'].setValue('main')
         w['channels'].setValue('rgb')
 
-        # OCIO Display / View 設定
         try:
             w['ocioDisplay'].setValue('sRGB - Display')
             w['ocioView'].setValue('ACES 1.0 - SDR Video')
@@ -288,7 +287,6 @@ def update_flux_write(node=None):
         
         ftype = w['file_type'].value()
         
-        # Displayモードかどうかで表示する色情報を変える
         if w['transformType'].value() == 'display':
             try:
                 cspace = f"{w['ocioDisplay'].value()} / {w['ocioView'].value()}"
@@ -327,7 +325,6 @@ def update_flux_write(node=None):
 # ------------------------------------------------------------------------------
 
 def render_with_auto_increment():
-    """Render Button Logic: Input Range by default"""
     node = nuke.thisNode()
     try:
         raw_cat = node['render_variant'].value()
@@ -343,7 +340,6 @@ def render_with_auto_increment():
         node['local_version'].setValue(new_ver)
         update_flux_write(node)
 
-    # Frame Range Logic
     first_frame = int(nuke.root().firstFrame())
     last_frame = int(nuke.root().lastFrame())
     
@@ -357,8 +353,6 @@ def render_with_auto_increment():
         
         start_time = datetime.datetime.now()
         
-        # 内部Writeノードの直接実行ではなく、Groupノード経由で実行することで
-        # Burn-in等の内部ツリー処理を確実に反映させる
         nuke.execute(node, first_frame, last_frame)
         
         try:
@@ -465,13 +459,11 @@ else: nuke.message("Folder does not exist yet.\\nRender first!")
     k_open = nuke.PyScript_Knob('reveal', 'Open Folder', open_code)
     group.addKnob(k_open)
 
-    # --- Info Display (New) ---
-    group.addKnob(nuke.Text_Knob('div3', '')) # セパレータ
+    group.addKnob(nuke.Text_Knob('div3', '')) 
     k_info = nuke.Text_Knob('render_info', 'Current Settings:')
-    k_info.setValue('Initializing...') # 初期値
+    k_info.setValue('Initializing...') 
     group.addKnob(k_info)
 
-    # --- Internal Nodes Construction ---
     with group:
         inp = nuke.createNode('Input')
         

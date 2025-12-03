@@ -6,6 +6,7 @@ import subprocess
 import datetime
 import requests
 import json
+import config  # Updated config loader
 
 from PySide6.QtCore import *
 from PySide6.QtGui import *
@@ -14,9 +15,9 @@ from PySide6.QtWidgets import *
 from ui_notif_panel import Ui_MainWindow
 
 # --- Configuration (From config.py) ---
-WEBHOOK_URL = "https://discord.com/api/webhooks/1404285816116609094/7jm0jTlw8I5kz3yTBfKwHSypNcM5ppx_8OvDBexw0yvmGIu2hMpYYA0OCuddmc9ahrIe"
-PLAYER_PATH = "C:/Program Files/DAUM/PotPlayer/PotPlayerMini64.exe"
-FILE_EXPLORER_PATH = "C:/Users/tosh/AppData/Local/Anchorpoint/Anchorpoint.exe"
+WEBHOOK_URL = config.WEBHOOK_URL
+PLAYER_PATH = config.PLAYER_PATH
+FILE_EXPLORER_PATH = config.FILE_EXPLORER_PATH
 
 # --- Notification Logic ---
 
@@ -36,7 +37,6 @@ def send_discord_notification(fields):
     headers = {"Content-Type": "application/json"}
 
     try:
-        # Timeoutを設定してNukeがフリーズするのを防ぐ
         response = requests.post(WEBHOOK_URL, data=json.dumps(payload), headers=headers, timeout=5)
         response.raise_for_status()
     except Exception as e:
@@ -51,13 +51,9 @@ class FluxNotificationPanel(QMainWindow):
         self.ui.setupUi(self)
         self.Write_node = write_node
         
-        # Window Settings
-        # WindowStaysOnTopHint: 最前面に表示
-        # Tool: タスクバーに出ないツールウィンドウ扱い（お好みで外してもOK）
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
-        # Effects
         self.op_effect = QGraphicsOpacityEffect(self)
         self.op_effect.setOpacity(0.95)
         self.setGraphicsEffect(self.op_effect)
@@ -67,20 +63,16 @@ class FluxNotificationPanel(QMainWindow):
         self.shadow.setColor(QColor(0, 0, 0, 100))
         self.ui.frame.setGraphicsEffect(self.shadow)
         
-        # Center Screen
         screen = QApplication.primaryScreen().geometry()
         self.move(int(screen.center().x() - self.width()/2.0), int(screen.center().y() - self.height()/2.0))
         
-        # Signals
         self.ui.pushButton_close.clicked.connect(self.close)
         self.ui.pushButton_2.clicked.connect(self.open_render_directory)
         self.ui.pushButton_3.clicked.connect(self.open_render_file)
         
-        # Create Read Button
         if hasattr(self.ui, 'pushButton_CreateRead'):
             self.ui.pushButton_CreateRead.clicked.connect(self.create_read_node)
         
-        # Set Info
         script_name = os.path.basename(nuke.root().name())
         self.ui.label_project_name.setText(script_name)
         self.ui.label_version.setText(f"Flux Pipeline | Duration: {duration_str}")
@@ -140,12 +132,9 @@ class FluxNotificationPanel(QMainWindow):
         
         self.close()
 
-# --- Global Reference Management ---
-# ガベージコレクションで消されないようにグローバルリストで保持するテクニック
 _flux_notification_instances = []
 
 def show_notification(write_node, start_time, first_frame, last_frame):
-    # 1. Calc Duration
     end_time = datetime.datetime.now()
     duration = end_time - start_time
     duration_s = duration.total_seconds()
@@ -160,7 +149,6 @@ def show_notification(write_node, start_time, first_frame, last_frame):
         avg = duration_s / num_frames
         avg_time_str = f"{avg:.2f}s"
 
-    # 2. Discord Notification
     script_name = os.path.basename(nuke.root().name())
     render_path = nuke.filename(write_node)
     filename = os.path.basename(render_path)
@@ -178,13 +166,10 @@ def show_notification(write_node, start_time, first_frame, last_frame):
     except:
         pass
 
-    # 3. Show UI (Main Thread)
     def _show_ui():
-        # 古いインスタンスを掃除（メモリリーク防止）
         global _flux_notification_instances
         _flux_notification_instances = [w for w in _flux_notification_instances if w.isVisible()]
         
-        # 新しいウィンドウを作成してリストに追加（これで消えない）
         window = FluxNotificationPanel(write_node, time_str)
         _flux_notification_instances.append(window)
         

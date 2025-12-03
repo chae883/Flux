@@ -2,29 +2,26 @@ import nuke
 import nukescripts
 import os
 import subprocess
+import config  # Updated config loader
 
 class FluxMakeOfficial(nukescripts.PythonPanel):
     def __init__(self):
         super(FluxMakeOfficial, self).__init__('Flux Make Official')
         
-        # --- 設定エリア --------------------------
-        self.base_root = "D:/Studio/WIP"
-        
-        # Anchorpointの実行ファイルパス (Windowsデフォルト)
-        # %LOCALAPPDATA% を自動で展開します
-        local_app_data = os.environ.get('LOCALAPPDATA')
-        self.ap_exe_path = os.path.join(local_app_data, "Anchorpoint", "Anchorpoint.exe")
-        # ----------------------------------------
+        # --- 設定エリア (Configから読み込み) --------------------------
+        self.base_root = config.BASE_ROOT
+        self.ap_exe_path = config.ANCHORPOINT_PATH
+        # -----------------------------------------------------------
         
         # --- UI定義 ---
         self.addKnob(nuke.Text_Knob('info', '', 'Define Shot Structure'))
         
         self.context_k = nuke.String_Knob('context', 'Context/User')
-        self.context_k.setValue('private')
+        self.context_k.setValue(config.DEFAULT_CONTEXT)
         self.addKnob(self.context_k)
         
         self.proj_k = nuke.String_Knob('project', 'Project Code (3 chars)')
-        self.proj_k.setValue('TMP')
+        self.proj_k.setValue(config.DEFAULT_PROJECT)
         self.addKnob(self.proj_k)
         
         self.seq_k = nuke.String_Knob('seq', 'Seq (e.g. 101)')
@@ -43,7 +40,7 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
         
         # ★ Anchorpoint連携用チェックボックス
         self.open_ap_k = nuke.Boolean_Knob('open_ap', 'Open Project in Anchorpoint')
-        self.open_ap_k.setValue(True) # デフォルトでON
+        self.open_ap_k.setValue(True)
         self.open_ap_k.setFlag(nuke.STARTLINE)
         self.addKnob(self.open_ap_k)
 
@@ -66,10 +63,10 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
         
         shot_name = f"{project}_{seq}_{shot}"
         
-        # Project Root (例: .../TMP) -> Anchorpointで開くのはここ
+        # Project Root
         project_root = os.path.join(self.base_root, context, project)
         
-        # Shot Dir (例: .../TMP/TMP_101_010)
+        # Shot Dir
         shot_dir = os.path.join(project_root, shot_name)
         
         script_dir = os.path.join(shot_dir, 'scripts')
@@ -89,7 +86,8 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
             nuke.message("Error: Project, Sequence, and Shot are required.")
             return
 
-        sub_folders = ['scripts', 'renders', 'plates', 'ref']
+        # Configからフォルダ構造を取得
+        sub_folders = config.FOLDER_STRUCTURE
         
         try:
             # フォルダ作成
@@ -118,21 +116,18 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
 
     def launch_anchorpoint(self, target_path):
         """Anchorpointを指定したパスで開く"""
-        # パス区切り文字の正規化
         target_path = os.path.abspath(target_path)
+        # configから取得したパスを使用
         exe_path = os.path.abspath(self.ap_exe_path)
 
         if os.path.exists(exe_path):
             try:
-                # subprocessを使って非同期で起動（Nukeをフリーズさせないため）
-                # 引数にフォルダパスを渡すと、Anchorpointはその場所を開こうとします
                 subprocess.Popen([exe_path, target_path])
                 print(f"Flux: Opening Anchorpoint at {target_path}")
             except Exception as e:
                 print(f"Flux: Failed to launch Anchorpoint. {e}")
         else:
             print(f"Flux Warning: Anchorpoint executable not found at {exe_path}")
-            # エラーで止めず、ログに出すだけに留める
             
 def show_dialog():
     panel = FluxMakeOfficial()
