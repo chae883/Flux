@@ -1,0 +1,45 @@
+{
+    "general": {
+        "webhook_url": "https://discord.com/api/webhooks/1404285816116609094/7jm0jTlw8I5kz3yTBfKwHSypNcM5ppx_8OvDBexw0yvmGIu2hMpYYA0OCuddmc9ahrIe"
+    },
+    "paths": {
+        "base_root": "D:/Studio/WIP",
+        "player_executable": "C:/Program Files/DAUM/PotPlayer/PotPlayerMini64.exe",
+        "file_explorer_executable": "C:/Users/tosh/AppData/Local/Anchorpoint/Anchorpoint.exe",
+        "anchorpoint_executable": "%LOCALAPPDATA%/Anchorpoint/Anchorpoint.exe",
+        "temp_windows": "C:/Temp",
+        "temp_linux": "/tmp"
+    },
+    "project_defaults": {
+        "format": "4K_DCP",
+        "width": 4096,
+        "height": 2160,
+        "fps": 24.0,
+        "frame_start": 108000,
+        "frame_end": 108240,
+        "context": "private",
+        "project_code": "TMP",
+        "folder_structure": [
+            "scripts",
+            "renders",
+            "plates",
+            "ref"
+        ]
+    },
+    "render_settings": {
+        "exr": {
+            "compression": "Zip (1 scanline)",
+            "datatype": "32 bit float"
+        },
+        "mov": {
+            "codec": "appr",
+            "prores_profile": "ProRes 4:4:4:4 XQ 12-bit",
+            "h264_profile": "High 4:2:0 8-bit",
+            "quality": "High"
+        },
+        "jpg": {
+            "quality": 1.0,
+            "sub_sampling": "4:4:4"
+        }
+    }
+}
