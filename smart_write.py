@@ -3,7 +3,8 @@ import os
 import platform
 import re
 import datetime
-import config  # Updated config loader
+import config  # Config loader
+import validator # Render Validator
 
 # ------------------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -347,6 +348,11 @@ def render_with_auto_increment():
     if inp:
         first_frame = int(inp.firstFrame())
         last_frame = int(inp.lastFrame())
+
+    # --- VALIDATOR CHECK ---
+    # レンダリング前にチェックを実行。失敗(False)なら処理を中止。
+    if not validator.validate_render(node, first_frame, last_frame):
+        return
         
     try:
         print(f"Flux Render: Frames {first_frame}-{last_frame}")
