@@ -2,16 +2,12 @@ import json
 import os
 import nuke
 
-# 設定ファイルのパス (このスクリプトと同じ階層にあると仮定)
+# 設定ファイルのパス
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'flux_config.json')
 
 _config_data = {}
 
 def load_config():
-    """
-    JSON設定ファイルを読み込みます。
-    ファイルがない場合やエラー時はデフォルト値を返すか警告を出します。
-    """
     global _config_data
     if not os.path.exists(CONFIG_FILE):
         nuke.tprint(f"[Flux] Config file not found: {CONFIG_FILE}")
@@ -23,27 +19,18 @@ def load_config():
     except Exception as e:
         nuke.tprint(f"[Flux] Error loading config: {e}")
 
-# 初回読み込み
 load_config()
 
 def get(section, key, default=None):
-    """
-    設定値を取得するヘルパー関数
-    例: config.get('paths', 'base_root')
-    """
     return _config_data.get(section, {}).get(key, default)
 
 def get_path(key, default=None):
-    """
-    pathsセクション専用。環境変数 (%LOCALAPPDATA%など) を展開して返します。
-    """
     raw_path = _config_data.get('paths', {}).get(key, default)
     if raw_path:
         return os.path.expandvars(raw_path)
     return default
 
-# --- 互換性のための直接アクセス変数 (既存コードとの接続用) ---
-# これらを使うことで、コードの書き換えを最小限にしつつJSON管理に移行できます。
+# --- Global Config Variables ---
 
 WEBHOOK_URL = get('general', 'webhook_url', '')
 PLAYER_PATH = get_path('player_executable', '')
@@ -69,3 +56,9 @@ RENDER_MOV = get('render_settings', 'mov', {})
 RENDER_JPG = get('render_settings', 'jpg', {})
 TEMP_WINDOWS = get_path('temp_windows', "C:/Temp")
 TEMP_LINUX = get_path('temp_linux', "/tmp")
+
+# --- Loader Settings ---
+# デフォルト値を用意しておき、JSONに記述がなければそれを使う安全設計
+_default_cs_map = {".exr": "ACES - ACEScg", ".jpg": "sRGB", ".png": "sRGB", ".mov": "sRGB"}
+LOADER_COLORSPACE_MAP = get('loader_rules', 'colorspace_overrides', _default_cs_map)
+LOADER_DISABLE_POSTAGE_STAMP = get('loader_rules', 'disable_postage_stamp', True)
