@@ -55,5 +55,5 @@ t.addCommand('Flux Write',
 
 # Flux Loader (Toolbar)
 t.addCommand('Flux Loader',
-             'import flux_loader; loader.show_dialog()',
+             'import loader; loader.show_dialog()',
              icon='Read.png') # 標準のReadアイコンを使用
