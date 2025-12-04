@@ -3,8 +3,8 @@ import os
 import platform
 import re
 import datetime
-import config  # Config loader
-import validator # Render Validator
+import config
+import validator
 
 # ------------------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -17,12 +17,9 @@ def get_script_root_name():
     return os.path.splitext(os.path.basename(root_name))[0]
 
 def sanitize_text(text):
-    if not text:
-        return ""
-    safe_text = re.sub(r'[^a-zA-Z0-9_\-]', '', text)
-    return safe_text
+    if not text: return ""
+    return re.sub(r'[^a-zA-Z0-9_\-]', '', text)
 
-# Local Version Button Actions
 def local_version_up(node):
     k = node['local_version']
     k.setValue(int(k.value()) + 1)
@@ -35,15 +32,36 @@ def local_version_down(node):
         k.setValue(val - 1)
         update_flux_write(node)
 
-# Script Version Up Action
-def script_version_up_wrapper():
-    try:
-        import version_up
-        version_up.run()
-    except ImportError:
-        nuke.message("Error: 'version_up.py' not found.")
-    except Exception as e:
-        nuke.message(f"Error:\n{e}")
+def bake_path(node):
+    """
+    現在の動的な設定を元に、ファイルパスを絶対パスとして「焼き付ける」。
+    TCL式を排除し、ツール依存をなくすための機能。
+    """
+    with node:
+        w_internal = nuke.toNode('Write_Internal')
+        current_path = w_internal['file'].evaluate() # 変数を展開して取得
+    
+    if not current_path:
+        nuke.message("Error: Could not evaluate path.")
+        return
+
+    # ユーザー確認
+    if not nuke.ask(f"Bake Path to Static?\n\n{current_path}\n\nThis will disable dynamic updates."):
+        return
+
+    # 内部Writeのパスを固定
+    w_internal['file'].setValue(current_path)
+    
+    # UIのロック
+    node['render_mode'].setEnabled(False)
+    node['render_variant'].setEnabled(False)
+    node['render_label'].setEnabled(False)
+    
+    # 状態表示
+    node['label'].setValue(f"LOCKED (Static Path)\n{os.path.basename(current_path)}")
+    node['tile_color'].setValue(0x555555ff) # グレーアウト
+
+    print(f"[Flux] Path baked: {current_path}")
 
 # ------------------------------------------------------------------------------
 # CORE LOGIC
@@ -55,6 +73,10 @@ def update_flux_write(node=None):
             node = nuke.thisNode()
         except:
             return
+
+    # Bakeされている（ロックされている）場合は更新しない
+    if not node['render_mode'].enabled():
+        return
 
     # Trigger Guard
     trigger_knobs = [
@@ -74,7 +96,6 @@ def update_flux_write(node=None):
         node['label'].setValue("⚠️ SCRIPT NOT SAVED ⚠️")
         return
 
-    # --- Fetch Values ---
     try:
         mode = node['render_mode'].value()      
         raw_cat = node['render_variant'].value()
@@ -121,8 +142,7 @@ def update_flux_write(node=None):
     # --- Naming Logic ---
     category_str = ""
     if raw_cat != '(Main)':
-        if raw_cat == 'element': category_str = 'elm'
-        else: category_str = raw_cat
+        category_str = 'elm' if raw_cat == 'element' else raw_cat
 
     label_str = sanitize_text(raw_lbl)
 
@@ -135,8 +155,7 @@ def update_flux_write(node=None):
         version_suffix = f"_v{local_ver_int:03d}"
 
     full_suffix_elements = []
-    if parts:
-        full_suffix_elements.extend(parts)
+    if parts: full_suffix_elements.extend(parts)
     
     mid_suffix = "_".join(full_suffix_elements)
     final_suffix_str = ""
@@ -147,15 +166,15 @@ def update_flux_write(node=None):
     final_name_str = f"{base_name_tcl}{final_suffix_str}"
 
     # --- Directories ---
+    # 環境変数を利用した絶対パス解決を推奨するが、ここでは相対パスの柔軟性を維持
     render_dir = "[file dirname [value root.name]]/../renders"
     
-    # ConfigからTempパスを取得
     if platform.system() == 'Windows':
         temp_root = config.TEMP_WINDOWS
     else:
         temp_root = config.TEMP_LINUX
 
-    # --- Burn-in Control ---
+    # --- Burn-in ---
     if is_mov and use_burnin:
         burn['disable'].setValue(False)
         msg = f"{final_name_str}  |  Frame: [frame]"
@@ -163,7 +182,7 @@ def update_flux_write(node=None):
     else:
         burn['disable'].setValue(True)
 
-    # --- Helper Functions ---
+    # --- Colorspace Helper ---
     try:
         available_cs = w['colorspace'].values()
     except:
@@ -176,7 +195,6 @@ def update_flux_write(node=None):
                     w['colorspace'].setValue(target_value)
                     return True
             except: pass
-
         for kw in fallback_keywords:
             for cs_name in available_cs:
                 if "color_picking" in cs_name.lower(): continue
@@ -191,22 +209,15 @@ def update_flux_write(node=None):
         if final_suffix_str: disp += f"\n[{final_suffix_str.lstrip('_')}]"
         node['label'].setValue(disp)
 
-    # --- Root Settings ---
     root = nuke.root()
     root_working = root['workingSpaceLUT'].value() 
 
-    # --------------------------------------------------------------------------
-    # 3. APPLY SETTINGS (FROM CONFIG)
-    # --------------------------------------------------------------------------
-
-    # === MODE: Master (EXR) ===
+    # --- APPLY SETTINGS ---
     if mode == 'Master (EXR)':
         w['transformType'].setValue('colorspace')
-        
         path = f"{render_dir}/{final_name_str}/{final_name_str}.%04d.exr"
         w['file'].setValue(path)
         
-        # ConfigからEXR設定を適用
         exr_settings = config.RENDER_EXR
         w['file_type'].setValue('exr')
         w['datatype'].setValue(exr_settings.get('datatype', '32 bit float'))
@@ -215,20 +226,15 @@ def update_flux_write(node=None):
         w['views'].setValue('main')
         w['channels'].setValue('rgb')
         
-        linear_candidates = ['default', 'scene_linear', 'ACES - ACEScg', 'ACEScg']
-        set_colorspace_smart(root_working, linear_candidates)
-        
+        set_colorspace_smart(root_working, ['default', 'scene_linear', 'ACES - ACEScg', 'ACEScg'])
         make_label("EXR (32f)", 0x44aa44ff)
 
-    # === MODE: Review (MOV) ===
     elif mode == 'Review (MOV)':
         w['transformType'].setValue('display')
-        
         path = f"{render_dir}/dailies/{final_name_str}.mov"
         w['file'].setValue(path)
         w['file_type'].setValue('mov')
         
-        # ConfigからMOV設定を適用
         mov_settings = config.RENDER_MOV
         try:
             w['mov64_codec'].setValue(mov_settings.get('codec', 'appr'))
@@ -236,90 +242,34 @@ def update_flux_write(node=None):
             w['mov_h264_codec_profile'].setValue(mov_settings.get('h264_profile', 'High 4:2:0 8-bit'))
             w['mov64_quality'].setValue(mov_settings.get('quality', 'High'))
         except: pass
-            
         w['views'].setValue('main')
         w['channels'].setValue('rgb')
-
         try:
             w['ocioDisplay'].setValue('sRGB - Display')
             w['ocioView'].setValue('ACES 1.0 - SDR Video')
-        except:
-            try:
-                w['ocioDisplay'].setValue('sRGB')
-                w['ocioView'].setValue('sRGB')
-            except: pass
-
+        except: pass
         make_label("MOV (Review)", 0x4488aaff)
 
-    # === MODE: Temp (JPG) ===
     elif mode == 'Temp (JPG)':
         w['transformType'].setValue('display')
-        
         path = f"{temp_root}/nuke_temp/{script_name}/{script_name}{final_suffix_str}.%04d.jpg"
         w['file'].setValue(path)
         w['file_type'].setValue('jpeg')
-        
-        # ConfigからJPG設定を適用
         jpg_settings = config.RENDER_JPG
         try:
             w['_jpeg_quality'].setValue(jpg_settings.get('quality', 1.0))
             w['_jpeg_sub_sampling'].setValue(jpg_settings.get('sub_sampling', '4:4:4'))
         except: pass
-            
         w['views'].setValue('main')
         w['channels'].setValue('rgb')
-
-        try:
-            w['ocioDisplay'].setValue('sRGB - Display')
-            w['ocioView'].setValue('ACES 1.0 - SDR Video')
-        except:
-            pass
-
         make_label("TEMP (JPG)", 0xaa4444ff)
 
-    # --------------------------------------------------------------------------
-    # 4. UPDATE INFO DISPLAY
-    # --------------------------------------------------------------------------
+    # Info Update
     if 'render_info' in node.knobs():
         info_lines = []
         out_path = w['file'].value()
-        file_name_disp = os.path.basename(out_path)
-        info_lines.append(f"File: {file_name_disp}")
-        
-        ftype = w['file_type'].value()
-        
-        if w['transformType'].value() == 'display':
-            try:
-                cspace = f"{w['ocioDisplay'].value()} / {w['ocioView'].value()}"
-            except:
-                cspace = "Display Transform"
-        else:
-            cspace = w['colorspace'].value()
-        
-        if ftype == 'exr':
-            dt = w['datatype'].value()
-            comp = w['compression'].value()
-            info_lines.append(f"Format: EXR ({dt})")
-            info_lines.append(f"Comp: {comp}")
-        elif ftype == 'mov':
-            codec_disp = "Unknown Codec"
-            try:
-                codec_fam = w['mov64_codec'].value()
-                if codec_fam == 'appr':
-                    codec_disp = w['mov_prores_codec_profile'].value()
-                elif codec_fam == 'avc1':
-                    codec_disp = f"H.264 ({w['mov_h264_codec_profile'].value()})"
-                else:
-                    codec_disp = codec_fam
-            except: pass
-            info_lines.append(f"Format: MOV ({codec_disp})")
-        elif ftype == 'jpeg':
-            qual = w['_jpeg_quality'].value()
-            info_lines.append(f"Format: JPEG (Quality {qual})")
-            
-        info_lines.append(f"Color: {cspace}")
+        info_lines.append(f"File: {os.path.basename(out_path)}")
         node['render_info'].setValue("\n".join(info_lines))
-
 
 # ------------------------------------------------------------------------------
 # RENDER ACTION
@@ -327,20 +277,26 @@ def update_flux_write(node=None):
 
 def render_with_auto_increment():
     node = nuke.thisNode()
-    try:
-        raw_cat = node['render_variant'].value()
-        is_main = (raw_cat == '(Main)')
-        use_local = node['use_local_version'].value()
-    except: return
+    
+    # Bake済みかどうかチェック
+    if not node['render_mode'].enabled():
+        # Bake済みの場合はそのまま実行（通常のレンダリング）
+        pass
+    else:
+        # Dynamicモードの場合のみバージョンアップ等のロジックを実行
+        try:
+            raw_cat = node['render_variant'].value()
+            is_main = (raw_cat == '(Main)')
+            use_local = node['use_local_version'].value()
+            
+            if not is_main and use_local:
+                current_ver = int(node['local_version'].value())
+                new_ver = current_ver + 1
+                node['local_version'].setValue(new_ver)
+                update_flux_write(node)
+        except: pass
 
-    if is_main: use_local = False
-
-    if not is_main and use_local:
-        current_ver = int(node['local_version'].value())
-        new_ver = current_ver + 1
-        node['local_version'].setValue(new_ver)
-        update_flux_write(node)
-
+    # Validator
     first_frame = int(nuke.root().firstFrame())
     last_frame = int(nuke.root().lastFrame())
     
@@ -349,29 +305,22 @@ def render_with_auto_increment():
         first_frame = int(inp.firstFrame())
         last_frame = int(inp.lastFrame())
 
-    # --- VALIDATOR CHECK ---
-    # レンダリング前にチェックを実行。失敗(False)なら処理を中止。
     if not validator.validate_render(node, first_frame, last_frame):
         return
         
     try:
         print(f"Flux Render: Frames {first_frame}-{last_frame}")
-        
         start_time = datetime.datetime.now()
         
+        # 内部Writeを実行
         nuke.execute(node, first_frame, last_frame)
         
         try:
             with node:
                 w_internal = nuke.toNode('Write_Internal')
-            
             import notification
             notification.show_notification(w_internal, start_time, first_frame, last_frame)
-            
-        except ImportError:
-            print("Flux Warning: notification module not found.")
-        except Exception as e:
-            print(f"Flux Warning: Notification failed. {e}")
+        except: pass
 
     except RuntimeError as e:
         if "Cancelled" not in str(e):
@@ -383,7 +332,7 @@ def render_with_auto_increment():
 
 def create_flux_write():
     if not get_script_root_name():
-        nuke.message("⚠️ Please Save Script First!\nスクリプトを保存してから実行してください。")
+        nuke.message("⚠️ Please Save Script First!")
         return
 
     group = nuke.createNode('Group')
@@ -409,17 +358,18 @@ def create_flux_write():
     group.addKnob(nuke.Text_Knob('div1', ''))
 
     k_burnin = nuke.Boolean_Knob('use_burnin', 'Burn-in Info')
-    k_burnin.setTooltip("Add text overlay (Shot Name & Frame) for Review/MOV.")
     k_burnin.setValue(True)
     k_burnin.setFlag(nuke.STARTLINE)
     group.addKnob(k_burnin)
 
+    # --- Script Ver Up ---
     cmd_ver_up_script = "import smart_write\nsmart_write.script_version_up_wrapper()"
     k_ver_up_script = nuke.PyScript_Knob('script_ver_up', 'Script Version Up (Save As...)', cmd_ver_up_script)
     k_ver_up_script.setFlag(nuke.STARTLINE)
     k_ver_up_script.setVisible(False) 
     group.addKnob(k_ver_up_script)
 
+    # --- Local Ver ---
     k_use_ver = nuke.Boolean_Knob('use_local_version', 'Use Local Version')
     k_use_ver.setFlag(nuke.STARTLINE)
     k_use_ver.setVisible(False)
@@ -445,6 +395,7 @@ def create_flux_write():
 
     group.addKnob(nuke.Text_Knob('div2', ''))
 
+    # --- Render Buttons ---
     cmd_render = "import smart_write\nsmart_write.render_with_auto_increment()"
     k_render = nuke.PyScript_Knob('render_now', 'Render', cmd_render)
     k_render.setFlag(nuke.STARTLINE) 
@@ -465,11 +416,18 @@ else: nuke.message("Folder does not exist yet.\\nRender first!")
     k_open = nuke.PyScript_Knob('reveal', 'Open Folder', open_code)
     group.addKnob(k_open)
 
+    # --- Bake Button (NEW) ---
+    bake_code = "import smart_write\nsmart_write.bake_path(nuke.thisNode())"
+    k_bake = nuke.PyScript_Knob('bake', 'Bake Path (Lock)', bake_code)
+    k_bake.setTooltip("Lock the file path to a static string. Useful before sending to render farm.")
+    group.addKnob(k_bake)
+
     group.addKnob(nuke.Text_Knob('div3', '')) 
     k_info = nuke.Text_Knob('render_info', 'Current Settings:')
     k_info.setValue('Initializing...') 
     group.addKnob(k_info)
 
+    # --- Internal Nodes ---
     with group:
         inp = nuke.createNode('Input')
         
@@ -481,7 +439,6 @@ else: nuke.message("Folder does not exist yet.\\nRender first!")
         burn['global_font_scale'].setValue(0.4)
         burn['enable_background'].setValue(True)
         burn['background_opacity'].setValue(0.6)
-        burn['background_border_x'].setValue(2000)
         
         w = nuke.createNode('Write')
         w.setName('Write_Internal')

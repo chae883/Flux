@@ -2,18 +2,16 @@ import nuke
 import nukescripts
 import os
 import subprocess
-import config  # Updated config loader
+import config
+import flux_env # New
 
 class FluxMakeOfficial(nukescripts.PythonPanel):
     def __init__(self):
         super(FluxMakeOfficial, self).__init__('Flux Make Official')
         
-        # --- 設定エリア (Configから読み込み) --------------------------
         self.base_root = config.BASE_ROOT
         self.ap_exe_path = config.ANCHORPOINT_PATH
-        # -----------------------------------------------------------
         
-        # --- UI定義 ---
         self.addKnob(nuke.Text_Knob('info', '', 'Define Shot Structure'))
         
         self.context_k = nuke.String_Knob('context', 'Context/User')
@@ -38,7 +36,6 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
         
         self.addKnob(nuke.Text_Knob('div2', ''))
         
-        # ★ Anchorpoint連携用チェックボックス
         self.open_ap_k = nuke.Boolean_Knob('open_ap', 'Open Project in Anchorpoint')
         self.open_ap_k.setValue(True)
         self.open_ap_k.setFlag(nuke.STARTLINE)
@@ -62,13 +59,8 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
         shot = self.shot_k.value()
         
         shot_name = f"{project}_{seq}_{shot}"
-        
-        # Project Root
         project_root = os.path.join(self.base_root, context, project)
-        
-        # Shot Dir
         shot_dir = os.path.join(project_root, shot_name)
-        
         script_dir = os.path.join(shot_dir, 'scripts')
         file_name = f"{shot_name}_comp_v001.nk"
         full_path = os.path.join(script_dir, file_name).replace('\\', '/')
@@ -86,17 +78,14 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
             nuke.message("Error: Project, Sequence, and Shot are required.")
             return
 
-        # Configからフォルダ構造を取得
         sub_folders = config.FOLDER_STRUCTURE
         
         try:
-            # フォルダ作成
             for sub in sub_folders:
                 path_to_make = os.path.join(shot_dir, sub)
                 if not os.path.exists(path_to_make):
                     os.makedirs(path_to_make)
             
-            # 保存
             save_path = full_path.replace('\\', '/')
             if os.path.exists(save_path):
                 if not nuke.ask(f"File already exists:\n{save_path}\n\nOverwrite?"):
@@ -104,7 +93,9 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
             
             nuke.scriptSaveAs(save_path)
             
-            # ★ Anchorpoint連携処理
+            # ★ 環境変数を即座に更新
+            flux_env.update_env_from_script()
+            
             if self.open_ap_k.value():
                 self.launch_anchorpoint(project_root)
 
@@ -115,9 +106,7 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
             nuke.message(f"Error:\n{e}")
 
     def launch_anchorpoint(self, target_path):
-        """Anchorpointを指定したパスで開く"""
         target_path = os.path.abspath(target_path)
-        # configから取得したパスを使用
         exe_path = os.path.abspath(self.ap_exe_path)
 
         if os.path.exists(exe_path):
