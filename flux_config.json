@@ -41,5 +41,16 @@
             "quality": 1.0,
             "sub_sampling": "4:4:4"
         }
+    },
+    "loader_rules": {
+        "disable_postage_stamp": true,
+        "colorspace_overrides": {
+            ".exr": "ACES - ACEScg",
+            ".jpg": "sRGB",
+            ".png": "sRGB",
+            ".mov": "sRGB",
+            ".mp4": "sRGB",
+            ".dpx": "Cineon"
+        }
     }
 }
