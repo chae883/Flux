@@ -13,6 +13,11 @@ m.addCommand('Project Setup',
 m.addCommand('Make Official', 
              'import make_official; make_official.show_dialog()')
 
+# ★ NEW: Flux Loader (Shift+R)
+m.addCommand('Flux Loader', 
+             'import loader; loader.show_dialog()',
+             'shift+r')
+
 m.addSeparator()
 
 m.addCommand('Version Up', 
@@ -47,3 +52,8 @@ t.addCommand('Flux Write',
              'import smart_write; smart_write.create_flux_write()', 
              'shift+w', 
              icon='Write.png')
+
+# Flux Loader (Toolbar)
+t.addCommand('Flux Loader',
+             'import loader; loader.show_dialog()',
+             icon='Read.png') # 標準のReadアイコンを使用
