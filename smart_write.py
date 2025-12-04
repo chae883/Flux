@@ -12,8 +12,7 @@ import validator
 
 def get_script_root_name():
     root_name = nuke.root().name()
-    if root_name == 'Root':
-        return None
+    if root_name == 'Root': return None
     return os.path.splitext(os.path.basename(root_name))[0]
 
 def sanitize_text(text):
@@ -33,35 +32,21 @@ def local_version_down(node):
         update_flux_write(node)
 
 def bake_path(node):
-    """
-    現在の動的な設定を元に、ファイルパスを絶対パスとして「焼き付ける」。
-    TCL式を排除し、ツール依存をなくすための機能。
-    """
+    """手動Bake用"""
     with node:
         w_internal = nuke.toNode('Write_Internal')
-        current_path = w_internal['file'].evaluate() # 変数を展開して取得
+        current_path = w_internal['file'].evaluate()
     
-    if not current_path:
-        nuke.message("Error: Could not evaluate path.")
-        return
+    if not current_path: return
 
-    # ユーザー確認
-    if not nuke.ask(f"Bake Path to Static?\n\n{current_path}\n\nThis will disable dynamic updates."):
-        return
+    if not nuke.ask(f"Bake Path to Static?\n\n{current_path}"): return
 
-    # 内部Writeのパスを固定
     w_internal['file'].setValue(current_path)
-    
-    # UIのロック
     node['render_mode'].setEnabled(False)
     node['render_variant'].setEnabled(False)
     node['render_label'].setEnabled(False)
-    
-    # 状態表示
     node['label'].setValue(f"LOCKED (Static Path)\n{os.path.basename(current_path)}")
-    node['tile_color'].setValue(0x555555ff) # グレーアウト
-
-    print(f"[Flux] Path baked: {current_path}")
+    node['tile_color'].setValue(0x555555ff)
 
 # ------------------------------------------------------------------------------
 # CORE LOGIC
@@ -69,27 +54,17 @@ def bake_path(node):
 
 def update_flux_write(node=None):
     if node is None:
-        try:
-            node = nuke.thisNode()
-        except:
-            return
+        try: node = nuke.thisNode()
+        except: return
 
-    # Bakeされている（ロックされている）場合は更新しない
-    if not node['render_mode'].enabled():
-        return
+    if not node['render_mode'].enabled(): return # Baked
 
     # Trigger Guard
-    trigger_knobs = [
-        'render_mode', 'render_variant', 'render_label', 
-        'use_local_version', 'local_version', 'showPanel',
-        'use_burnin'
-    ]
+    trigger_knobs = ['render_mode', 'render_variant', 'render_label', 'use_local_version', 'local_version', 'showPanel', 'use_burnin']
     try:
         k = nuke.thisKnob()
-        if k and k.name() not in trigger_knobs: 
-            return
-    except:
-        pass
+        if k and k.name() not in trigger_knobs: return
+    except: pass
 
     script_name = get_script_root_name()
     if not script_name:
@@ -103,173 +78,111 @@ def update_flux_write(node=None):
         use_local_ver = node['use_local_version'].value()
         local_ver_int = int(node['local_version'].value())
         use_burnin = node['use_burnin'].value()
-    except ValueError:
-        return 
+    except ValueError: return 
 
-    # --- Dynamic UI Control ---
+    # UI Control
     is_main = (raw_cat == '(Main)')
-    k_grp_local = [
-        node.knob('use_local_version'), node.knob('ver_down'), 
-        node.knob('local_version'), node.knob('ver_up')
-    ]
-    k_btn_script = node.knob('script_ver_up')
-    k_render = node.knob('render_now')
-    k_burnin = node.knob('use_burnin')
-
+    k_grp = [node.knob('use_local_version'), node.knob('ver_down'), node.knob('local_version'), node.knob('ver_up')]
+    
     if is_main:
-        for k in k_grp_local: k.setVisible(False)
-        k_btn_script.setVisible(True)
-        k_render.setLabel("Render (Main)")
+        for k in k_grp: k.setVisible(False)
+        node.knob('script_ver_up').setVisible(True)
+        node.knob('render_now').setLabel("Render (Main)")
         use_local_ver = False 
     else:
-        for k in k_grp_local: k.setVisible(True)
-        k_btn_script.setVisible(False)
-        if use_local_ver:
-            k_render.setLabel("Render (Auto-Inc)")
-        else:
-            k_render.setLabel("Render (Current)")
+        for k in k_grp: k.setVisible(True)
+        node.knob('script_ver_up').setVisible(False)
+        node.knob('render_now').setLabel("Render (Auto-Inc)" if use_local_ver else "Render (Current)")
 
     is_mov = (mode == 'Review (MOV)')
-    k_burnin.setVisible(is_mov)
+    node.knob('use_burnin').setVisible(is_mov)
 
-    # --- Internal Nodes ---
     with node:
         w = nuke.toNode('Write_Internal')
         burn = nuke.toNode('BurnIn_Internal')
-    
     if not w or not burn: return 
 
-    # --- Naming Logic ---
-    category_str = ""
-    if raw_cat != '(Main)':
-        category_str = 'elm' if raw_cat == 'element' else raw_cat
-
-    label_str = sanitize_text(raw_lbl)
-
-    parts = []
-    if category_str: parts.append(category_str)
-    if label_str:    parts.append(label_str)
+    # Path Generation
+    cat_str = 'elm' if raw_cat == 'element' else ('' if raw_cat == '(Main)' else raw_cat)
+    lbl_str = sanitize_text(raw_lbl)
+    parts = [p for p in [cat_str, lbl_str] if p]
+    ver_suffix = f"_v{local_ver_int:03d}" if use_local_ver else ""
     
-    version_suffix = ""
-    if use_local_ver:
-        version_suffix = f"_v{local_ver_int:03d}"
-
-    full_suffix_elements = []
-    if parts: full_suffix_elements.extend(parts)
+    mid = "_".join(parts)
+    suffix = (f"_{mid}" if mid else "") + ver_suffix
     
-    mid_suffix = "_".join(full_suffix_elements)
-    final_suffix_str = ""
-    if mid_suffix: final_suffix_str += f"_{mid_suffix}"
-    if version_suffix: final_suffix_str += version_suffix
+    base_tcl = "[file rootname [file tail [value root.name]]]"
+    final_name = f"{base_tcl}{suffix}"
 
-    base_name_tcl = "[file rootname [file tail [value root.name]]]"
-    final_name_str = f"{base_name_tcl}{final_suffix_str}"
-
-    # --- Directories ---
-    # 環境変数を利用した絶対パス解決を推奨するが、ここでは相対パスの柔軟性を維持
     render_dir = "[file dirname [value root.name]]/../renders"
-    
-    if platform.system() == 'Windows':
-        temp_root = config.TEMP_WINDOWS
-    else:
-        temp_root = config.TEMP_LINUX
+    temp_root = config.TEMP_WINDOWS if platform.system() == 'Windows' else config.TEMP_LINUX
 
-    # --- Burn-in ---
+    # Burn-in
     if is_mov and use_burnin:
         burn['disable'].setValue(False)
-        msg = f"{final_name_str}  |  Frame: [frame]"
-        burn['message'].setValue(msg)
+        burn['message'].setValue(f"{final_name}  |  Frame: [frame]")
     else:
         burn['disable'].setValue(True)
 
-    # --- Colorspace Helper ---
-    try:
-        available_cs = w['colorspace'].values()
-    except:
-        available_cs = []
-
-    def set_colorspace_smart(target_value, fallback_keywords=[]):
-        if target_value:
-            try:
-                if "color_picking" not in target_value:
-                    w['colorspace'].setValue(target_value)
-                    return True
-            except: pass
-        for kw in fallback_keywords:
-            for cs_name in available_cs:
-                if "color_picking" in cs_name.lower(): continue
-                if kw.lower() in cs_name.lower():
-                    try: w['colorspace'].setValue(cs_name); return True
+    # Colorspace Helper
+    root_working = nuke.root()['workingSpaceLUT'].value() 
+    def set_cs(target, keywords=[]):
+        try:
+            if target and "color_picking" not in target:
+                w['colorspace'].setValue(target)
+                return
+        except: pass
+        for kw in keywords:
+            for cs in w['colorspace'].values():
+                if "color_picking" in cs.lower(): continue
+                if kw.lower() in cs.lower():
+                    try: w['colorspace'].setValue(cs); return
                     except: pass
-        return False
 
-    def make_label(type_text, color):
-        node['tile_color'].setValue(color)
-        disp = f"{type_text}\n{script_name}"
-        if final_suffix_str: disp += f"\n[{final_suffix_str.lstrip('_')}]"
-        node['label'].setValue(disp)
-
-    root = nuke.root()
-    root_working = root['workingSpaceLUT'].value() 
-
-    # --- APPLY SETTINGS ---
+    # Apply Settings
     if mode == 'Master (EXR)':
         w['transformType'].setValue('colorspace')
-        path = f"{render_dir}/{final_name_str}/{final_name_str}.%04d.exr"
-        w['file'].setValue(path)
+        w['file'].setValue(f"{render_dir}/{final_name}/{final_name}.%04d.exr")
         
-        exr_settings = config.RENDER_EXR
+        st = config.RENDER_EXR
         w['file_type'].setValue('exr')
-        w['datatype'].setValue(exr_settings.get('datatype', '32 bit float'))
-        w['compression'].setValue(exr_settings.get('compression', 'Zip (1 scanline)'))
-        w['metadata'].setValue('all metadata')
-        w['views'].setValue('main')
-        w['channels'].setValue('rgb')
-        
-        set_colorspace_smart(root_working, ['default', 'scene_linear', 'ACES - ACEScg', 'ACEScg'])
-        make_label("EXR (32f)", 0x44aa44ff)
+        w['datatype'].setValue(st.get('datatype', '32 bit float'))
+        w['compression'].setValue(st.get('compression', 'Zip (1 scanline)'))
+        w['views'].setValue('main'); w['channels'].setValue('rgb')
+        set_cs(root_working, ['default', 'scene_linear', 'ACES - ACEScg', 'ACEScg'])
+        node['tile_color'].setValue(0x44aa44ff)
+        node['label'].setValue(f"EXR (32f)\n{script_name}\n[{suffix.lstrip('_')}]")
 
     elif mode == 'Review (MOV)':
         w['transformType'].setValue('display')
-        path = f"{render_dir}/dailies/{final_name_str}.mov"
-        w['file'].setValue(path)
+        w['file'].setValue(f"{render_dir}/dailies/{final_name}.mov")
         w['file_type'].setValue('mov')
         
-        mov_settings = config.RENDER_MOV
+        st = config.RENDER_MOV
         try:
-            w['mov64_codec'].setValue(mov_settings.get('codec', 'appr'))
-            w['mov_prores_codec_profile'].setValue(mov_settings.get('prores_profile', 'ProRes 4:4:4:4 XQ 12-bit'))
-            w['mov_h264_codec_profile'].setValue(mov_settings.get('h264_profile', 'High 4:2:0 8-bit'))
-            w['mov64_quality'].setValue(mov_settings.get('quality', 'High'))
+            w['mov64_codec'].setValue(st.get('codec', 'appr'))
+            w['mov_prores_codec_profile'].setValue(st.get('prores_profile', 'ProRes 4:4:4:4 XQ 12-bit'))
+            w['mov64_quality'].setValue(st.get('quality', 'High'))
         except: pass
-        w['views'].setValue('main')
-        w['channels'].setValue('rgb')
-        try:
-            w['ocioDisplay'].setValue('sRGB - Display')
-            w['ocioView'].setValue('ACES 1.0 - SDR Video')
+        
+        w['views'].setValue('main'); w['channels'].setValue('rgb')
+        try: w['ocioDisplay'].setValue('sRGB - Display'); w['ocioView'].setValue('ACES 1.0 - SDR Video')
         except: pass
-        make_label("MOV (Review)", 0x4488aaff)
+        node['tile_color'].setValue(0x4488aaff)
+        node['label'].setValue(f"MOV (Review)\n{script_name}\n[{suffix.lstrip('_')}]")
 
     elif mode == 'Temp (JPG)':
         w['transformType'].setValue('display')
-        path = f"{temp_root}/nuke_temp/{script_name}/{script_name}{final_suffix_str}.%04d.jpg"
-        w['file'].setValue(path)
+        w['file'].setValue(f"{temp_root}/nuke_temp/{script_name}/{script_name}{suffix}.%04d.jpg")
         w['file_type'].setValue('jpeg')
-        jpg_settings = config.RENDER_JPG
-        try:
-            w['_jpeg_quality'].setValue(jpg_settings.get('quality', 1.0))
-            w['_jpeg_sub_sampling'].setValue(jpg_settings.get('sub_sampling', '4:4:4'))
+        try: w['_jpeg_quality'].setValue(config.RENDER_JPG.get('quality', 1.0))
         except: pass
-        w['views'].setValue('main')
-        w['channels'].setValue('rgb')
-        make_label("TEMP (JPG)", 0xaa4444ff)
+        w['views'].setValue('main'); w['channels'].setValue('rgb')
+        node['tile_color'].setValue(0xaa4444ff)
+        node['label'].setValue(f"TEMP (JPG)\n{script_name}\n[{suffix.lstrip('_')}]")
 
-    # Info Update
     if 'render_info' in node.knobs():
-        info_lines = []
-        out_path = w['file'].value()
-        info_lines.append(f"File: {os.path.basename(out_path)}")
-        node['render_info'].setValue("\n".join(info_lines))
+        node['render_info'].setValue(f"File: {os.path.basename(w['file'].value())}")
 
 # ------------------------------------------------------------------------------
 # RENDER ACTION
@@ -278,53 +191,70 @@ def update_flux_write(node=None):
 def render_with_auto_increment():
     node = nuke.thisNode()
     
-    # Bake済みかどうかチェック
-    if not node['render_mode'].enabled():
-        # Bake済みの場合はそのまま実行（通常のレンダリング）
-        pass
-    else:
-        # Dynamicモードの場合のみバージョンアップ等のロジックを実行
+    # Auto-Increment Logic (Only if dynamic)
+    if node['render_mode'].enabled():
         try:
             raw_cat = node['render_variant'].value()
             is_main = (raw_cat == '(Main)')
-            use_local = node['use_local_version'].value()
-            
-            if not is_main and use_local:
-                current_ver = int(node['local_version'].value())
-                new_ver = current_ver + 1
-                node['local_version'].setValue(new_ver)
+            if not is_main and node['use_local_version'].value():
+                ver_k = node['local_version']
+                ver_k.setValue(int(ver_k.value()) + 1)
                 update_flux_write(node)
         except: pass
 
-    # Validator
-    first_frame = int(nuke.root().firstFrame())
-    last_frame = int(nuke.root().lastFrame())
-    
-    inp = node.input(0)
-    if inp:
-        first_frame = int(inp.firstFrame())
-        last_frame = int(inp.lastFrame())
+    # Validator Check
+    start = int(nuke.root().firstFrame())
+    end = int(nuke.root().lastFrame())
+    if node.input(0):
+        start = int(node.input(0).firstFrame())
+        end = int(node.input(0).lastFrame())
 
-    if not validator.validate_render(node, first_frame, last_frame):
-        return
+    if not validator.validate_render(node, start, end): return
         
+    # --- AUTO-BAKE (Pre-Render) ---
+    # レンダリング直前にパスを確定(Bake)させ、終了後に戻す
+    # これによりファームやバックグラウンド処理でのパス解決エラーを防ぐ
+    
+    with node:
+        w_internal = nuke.toNode('Write_Internal')
+        # 現在のTCL式を含んだパスを保持
+        original_file_str = w_internal['file'].value()
+        
+        # 評価済みの静的パスを取得
+        baked_path = w_internal['file'].evaluate()
+        
+        # 静的パスをセット (一時的)
+        w_internal['file'].setValue(baked_path)
+        print(f"[Flux] Auto-Baked path for render: {baked_path}")
+
     try:
-        print(f"Flux Render: Frames {first_frame}-{last_frame}")
+        print(f"Flux Render: Frames {start}-{end}")
         start_time = datetime.datetime.now()
         
-        # 内部Writeを実行
-        nuke.execute(node, first_frame, last_frame)
+        nuke.execute(node, start, end)
         
         try:
-            with node:
-                w_internal = nuke.toNode('Write_Internal')
+            with node: w_int = nuke.toNode('Write_Internal')
             import notification
-            notification.show_notification(w_internal, start_time, first_frame, last_frame)
+            notification.show_notification(w_int, start_time, start, end)
         except: pass
 
     except RuntimeError as e:
         if "Cancelled" not in str(e):
             nuke.message(f"Render Error:\n{e}")
+            
+    finally:
+        # --- RESTORE (Post-Render) ---
+        # レンダリング終了後（成功・失敗問わず）に元のTCL式に戻す
+        with node:
+            w_internal = nuke.toNode('Write_Internal')
+            # 念のため、現在がBake状態か確認してから戻す
+            if w_internal['file'].value() == baked_path:
+                w_internal['file'].setValue(original_file_str)
+                print("[Flux] Restored dynamic path expression.")
+            
+            # Groupノードの表示更新（念のため）
+            update_flux_write(node)
 
 # ------------------------------------------------------------------------------
 # NODE CREATION
@@ -339,124 +269,72 @@ def create_flux_write():
     group.setName('FluxWrite')
     group['tile_color'].setValue(0x44aa44ff)
     
-    k_tab = nuke.Tab_Knob('Flux_Tab', 'Flux Settings')
-    group.addKnob(k_tab)
+    group.addKnob(nuke.Tab_Knob('Flux_Tab', 'Flux Settings'))
     
     modes = ['Master (EXR)', 'Review (MOV)', 'Temp (JPG)']
-    k_mode = nuke.Enumeration_Knob('render_mode', 'Render Mode', modes)
-    group.addKnob(k_mode)
+    group.addKnob(nuke.Enumeration_Knob('render_mode', 'Render Mode', modes))
     
     variants = ['(Main)', 'precomp', 'matte', 'bg', 'fg', 'element', 'denoise', 'tech']
     k_tag = nuke.Enumeration_Knob('render_variant', 'Content Type', variants)
     k_tag.setFlag(nuke.STARTLINE)
     group.addKnob(k_tag)
 
-    k_label = nuke.String_Knob('render_label', '') 
-    k_label.clearFlag(nuke.STARTLINE)
-    group.addKnob(k_label)
+    k_lbl = nuke.String_Knob('render_label', '')
+    k_lbl.clearFlag(nuke.STARTLINE)
+    group.addKnob(k_lbl)
     
     group.addKnob(nuke.Text_Knob('div1', ''))
 
-    k_burnin = nuke.Boolean_Knob('use_burnin', 'Burn-in Info')
-    k_burnin.setValue(True)
-    k_burnin.setFlag(nuke.STARTLINE)
-    group.addKnob(k_burnin)
+    k_burn = nuke.Boolean_Knob('use_burnin', 'Burn-in Info')
+    k_burn.setValue(True); k_burn.setFlag(nuke.STARTLINE)
+    group.addKnob(k_burn)
 
-    # --- Script Ver Up ---
-    cmd_ver_up_script = "import smart_write\nsmart_write.script_version_up_wrapper()"
-    k_ver_up_script = nuke.PyScript_Knob('script_ver_up', 'Script Version Up (Save As...)', cmd_ver_up_script)
-    k_ver_up_script.setFlag(nuke.STARTLINE)
-    k_ver_up_script.setVisible(False) 
-    group.addKnob(k_ver_up_script)
+    # Script Ver Up
+    k_scr = nuke.PyScript_Knob('script_ver_up', 'Script Version Up (Save As...)', "import smart_write\nsmart_write.script_version_up_wrapper()")
+    k_scr.setFlag(nuke.STARTLINE); k_scr.setVisible(False)
+    group.addKnob(k_scr)
 
-    # --- Local Ver ---
-    k_use_ver = nuke.Boolean_Knob('use_local_version', 'Use Local Version')
-    k_use_ver.setFlag(nuke.STARTLINE)
-    k_use_ver.setVisible(False)
-    group.addKnob(k_use_ver)
+    # Local Ver
+    k_use = nuke.Boolean_Knob('use_local_version', 'Use Local Version')
+    k_use.setFlag(nuke.STARTLINE); k_use.setVisible(False)
+    group.addKnob(k_use)
 
-    cmd_down = "import smart_write\nsmart_write.local_version_down(nuke.thisNode())"
-    k_down = nuke.PyScript_Knob('ver_down', ' - ', cmd_down)
-    k_down.clearFlag(nuke.STARTLINE)
-    k_down.setVisible(False)
+    k_down = nuke.PyScript_Knob('ver_down', ' - ', "import smart_write\nsmart_write.local_version_down(nuke.thisNode())")
+    k_down.clearFlag(nuke.STARTLINE); k_down.setVisible(False)
     group.addKnob(k_down)
 
     k_ver = nuke.Int_Knob('local_version', '')
-    k_ver.setValue(1)
-    k_ver.clearFlag(nuke.STARTLINE)
-    k_ver.setVisible(False)
+    k_ver.setValue(1); k_ver.clearFlag(nuke.STARTLINE); k_ver.setVisible(False)
     group.addKnob(k_ver)
 
-    cmd_up = "import smart_write\nsmart_write.local_version_up(nuke.thisNode())"
-    k_up = nuke.PyScript_Knob('ver_up', ' + ', cmd_up)
-    k_up.clearFlag(nuke.STARTLINE)
-    k_up.setVisible(False)
+    k_up = nuke.PyScript_Knob('ver_up', ' + ', "import smart_write\nsmart_write.local_version_up(nuke.thisNode())")
+    k_up.clearFlag(nuke.STARTLINE); k_up.setVisible(False)
     group.addKnob(k_up)
 
     group.addKnob(nuke.Text_Knob('div2', ''))
 
-    # --- Render Buttons ---
-    cmd_render = "import smart_write\nsmart_write.render_with_auto_increment()"
-    k_render = nuke.PyScript_Knob('render_now', 'Render', cmd_render)
-    k_render.setFlag(nuke.STARTLINE) 
-    group.addKnob(k_render)
+    k_ren = nuke.PyScript_Knob('render_now', 'Render', "import smart_write\nsmart_write.render_with_auto_increment()")
+    k_ren.setFlag(nuke.STARTLINE)
+    group.addKnob(k_ren)
 
-    open_code = """
-import os, sys, subprocess
-n = nuke.thisNode()
-with n: w = nuke.toNode('Write_Internal')
-path = w['file'].evaluate()
-folder = os.path.dirname(path)
-if os.path.exists(folder):
-    if sys.platform == 'win32': os.startfile(folder)
-    elif sys.platform == 'darwin': subprocess.Popen(['open', folder])
-    else: subprocess.Popen(['xdg-open', folder])
-else: nuke.message("Folder does not exist yet.\\nRender first!")
-"""
-    k_open = nuke.PyScript_Knob('reveal', 'Open Folder', open_code)
-    group.addKnob(k_open)
+    open_code = "import os, sys, subprocess; n=nuke.thisNode(); w=nuke.toNode('Write_Internal'); p=w['file'].evaluate(); f=os.path.dirname(p); os.startfile(f) if sys.platform=='win32' else subprocess.Popen(['open', f]) if sys.platform=='darwin' else subprocess.Popen(['xdg-open', f])"
+    group.addKnob(nuke.PyScript_Knob('reveal', 'Open Folder', open_code))
 
-    # --- Bake Button (NEW) ---
-    bake_code = "import smart_write\nsmart_write.bake_path(nuke.thisNode())"
-    k_bake = nuke.PyScript_Knob('bake', 'Bake Path (Lock)', bake_code)
-    k_bake.setTooltip("Lock the file path to a static string. Useful before sending to render farm.")
+    k_bake = nuke.PyScript_Knob('bake', 'Bake Path (Lock)', "import smart_write\nsmart_write.bake_path(nuke.thisNode())")
+    k_bake.setTooltip("Lock the file path to a static string.")
     group.addKnob(k_bake)
 
     group.addKnob(nuke.Text_Knob('div3', '')) 
     k_info = nuke.Text_Knob('render_info', 'Current Settings:')
-    k_info.setValue('Initializing...') 
+    k_info.setValue('Initializing...')
     group.addKnob(k_info)
 
-    # --- Internal Nodes ---
     with group:
         inp = nuke.createNode('Input')
-        
-        burn = nuke.createNode('Text2')
-        burn.setName('BurnIn_Internal')
-        burn['box'].setValue([0, 0, nuke.root().width(), 80])
-        burn['xjustify'].setValue('center')
-        burn['yjustify'].setValue('bottom')
-        burn['global_font_scale'].setValue(0.4)
-        burn['enable_background'].setValue(True)
-        burn['background_opacity'].setValue(0.6)
-        
-        w = nuke.createNode('Write')
-        w.setName('Write_Internal')
-        w['create_directories'].setValue(True)
-        
+        burn = nuke.createNode('Text2', 'name BurnIn_Internal box {0 0 1920 80} xjustify center yjustify bottom global_font_scale 0.4 enable_background true background_opacity 0.6', False)
+        w = nuke.createNode('Write', 'name Write_Internal create_directories true', False)
         out = nuke.createNode('Output')
-        
-        burn.setInput(0, inp)
-        w.setInput(0, burn)
-        out.setInput(0, w)
+        burn.setInput(0, inp); w.setInput(0, burn); out.setInput(0, w)
 
-    callback_code = """
-try:
-    import smart_write
-    smart_write.update_flux_write()
-except ImportError:
-    pass
-"""
-    group['knobChanged'].setValue(callback_code)
-    
+    group['knobChanged'].setValue("try:\n import smart_write\n smart_write.update_flux_write()\nexcept: pass")
     update_flux_write(group)
