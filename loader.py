@@ -2,53 +2,48 @@ import nuke
 import nukescripts
 import os
 import re
+import glob
 import config
 
 class FluxLoader(nukescripts.PythonPanel):
     def __init__(self):
         super(FluxLoader, self).__init__('Flux Loader')
         
-        # --- 現在のコンテキスト（ショット）の特定 ---
         self.shot_root = self.determine_shot_root()
-        
-        # UI: ヘッダー情報
-        display_path = self.shot_root if self.shot_root else "Unknown (Script not saved correctly?)"
+        display_path = self.shot_root if self.shot_root else "Unknown"
         self.addKnob(nuke.Text_Knob('path_info', 'Shot Path:', display_path))
         self.addKnob(nuke.Text_Knob('div1', ''))
 
-        # UI: カテゴリ選択
+        # --- Asset Browser Section ---
         self.categories = [f for f in config.FOLDER_STRUCTURE if f != 'scripts']
         self.cat_menu = nuke.Enumeration_Knob('category', 'Category', self.categories)
         self.addKnob(self.cat_menu)
 
-        # UI: アセットリスト
         self.asset_menu = nuke.Enumeration_Knob('assets', 'Available Assets', [])
         self.addKnob(self.asset_menu)
 
-        # UI: 更新ボタン
         self.refresh_btn = nuke.PyScript_Knob('refresh', 'Refresh Scan')
         self.refresh_btn.clearFlag(nuke.STARTLINE)
         self.addKnob(self.refresh_btn)
         
-        self.addKnob(nuke.Text_Knob('div2', ''))
-
-        # UI: 読み込みボタン
         self.load_btn = nuke.PyScript_Knob('load', 'LOAD AS READ NODE')
         self.addKnob(self.load_btn)
 
-        # 初期スキャン実行
+        # --- Version Manager Section (New) ---
+        self.addKnob(nuke.Text_Knob('div_ver', 'Version Manager'))
+        self.update_btn = nuke.PyScript_Knob('update_selected', 'Update Selected Reads to Latest')
+        self.update_btn.setTooltip("Scans for higher versions (e.g. v001 -> v002) for selected Read nodes.")
+        self.addKnob(self.update_btn)
+
         self.scanned_data = {} 
         self.refresh_scan()
 
     def determine_shot_root(self):
         script_path = nuke.root().name()
-        if script_path == 'Root':
-            return None
-        
-        script_dir = os.path.dirname(script_path)
-        shot_root = os.path.dirname(script_dir)
-        
-        return shot_root.replace('\\', '/')
+        if script_path == 'Root': return None
+        # 正規表現を使った簡易親ディレクトリ推定も可能だが、
+        # ここでは既存の相対ロジックでもLoaderとしては十分機能する
+        return os.path.dirname(os.path.dirname(script_path)).replace('\\', '/')
 
     def refresh_scan(self):
         if not self.shot_root or not os.path.exists(self.shot_root):
@@ -58,7 +53,6 @@ class FluxLoader(nukescripts.PythonPanel):
         for cat in self.categories:
             search_path = os.path.join(self.shot_root, cat)
             items = []
-            
             if os.path.exists(search_path):
                 try:
                     root_files = nuke.getFileNameList(search_path) or []
@@ -70,59 +64,40 @@ class FluxLoader(nukescripts.PythonPanel):
                                 items.append(f"{f}/{sub}")
                         else:
                             items.append(f)
-                except Exception as e:
-                    print(f"Flux Loader Error scanning {search_path}: {e}")
-            
+                except: pass
             self.scanned_data[cat] = sorted(items)
-
         self.update_asset_list()
 
     def update_asset_list(self):
         current_cat = self.cat_menu.value()
         items = self.scanned_data.get(current_cat, [])
-        
-        if not items:
-            items = ["(No Assets Found)"]
-        
+        if not items: items = ["(No Assets Found)"]
         self.asset_menu.setValues(items)
         self.asset_menu.setValue(0)
 
     def knobChanged(self, knob):
-        if knob == self.cat_menu:
-            self.update_asset_list()
-        
-        if knob == self.refresh_btn:
-            self.refresh_scan()
-            
-        if knob == self.load_btn:
-            self.create_read_node()
+        if knob == self.cat_menu: self.update_asset_list()
+        if knob == self.refresh_btn: self.refresh_scan()
+        if knob == self.load_btn: self.create_read_node()
+        if knob == self.update_btn: self.update_selected_reads()
 
     def create_read_node(self):
         if not self.shot_root:
-            nuke.message("Error: Script must be saved in a proper project structure first.")
+            nuke.message("Error: Script context unknown.")
             return
-
         cat = self.cat_menu.value()
         asset_str = self.asset_menu.value()
-        
-        if asset_str == "(No Assets Found)":
-            return
+        if asset_str == "(No Assets Found)": return
 
-        # パスの構築
         match = re.match(r'^(.*?)(\s+(\d+-\d+))?$', asset_str)
-        if not match:
-            return
-            
+        if not match: return
         rel_path = match.group(1) 
         range_str = match.group(3)
-
         full_path = os.path.join(self.shot_root, cat, rel_path).replace('\\', '/')
         
-        # --- Readノード作成 ---
         r = nuke.createNode('Read')
         r['file'].fromUserText(full_path)
         
-        # フレームレンジ設定
         if range_str:
             try:
                 start, end = map(int, range_str.split('-'))
@@ -130,37 +105,118 @@ class FluxLoader(nukescripts.PythonPanel):
                 r['last'].setValue(end)
                 r['origfirst'].setValue(start)
                 r['origlast'].setValue(end)
-            except:
-                pass 
+            except: pass 
 
-        # --- 色空間の自動設定 (Config参照) ---
-        # 以前のハードコーディングを廃止し、config.py経由でJSONルールを参照
         ext = os.path.splitext(rel_path)[1].lower()
         cs_map = config.LOADER_COLORSPACE_MAP
-        
         if ext in cs_map:
-            target_cs = cs_map[ext]
-            try:
-                # Nukeの設定に存在するか確認してからセット
-                r['colorspace'].setValue(target_cs)
-            except:
-                # 存在しない場合（例: OCIO設定が違う）はコンソールに警告
-                print(f"Flux Loader Warning: Colorspace '{target_cs}' not found for {ext}. Using default.")
+            try: r['colorspace'].setValue(cs_map[ext])
+            except: pass
 
-        # --- おもてなし機能 1: ポストスタンプ制御 ---
         if config.LOADER_DISABLE_POSTAGE_STAMP:
             r['postage_stamp'].setValue(False)
 
-        # --- おもてなし機能 2: ノード選択と位置調整 ---
-        # 他のノードの選択を解除し、このノードだけを選択状態にする
-        for n in nuke.selectedNodes():
-            n.setSelected(False)
+        for n in nuke.selectedNodes(): n.setSelected(False)
         r.setSelected(True)
+
+    def update_selected_reads(self):
+        """
+        選択されたReadノードのバージョンアップを試みる
+        """
+        nodes = nuke.selectedNodes('Read')
+        if not nodes:
+            nuke.message("Please select Read nodes to update.")
+            return
+
+        updated_count = 0
         
-        # 少しずらして配置（連続作成時に重ならないように）
-        # Nukeの自動配置にお任せする手もあるが、明示的に選択しておけばユーザーが移動しやすい
-        
-        # パネルは開いたまま（連続ロードのため）
+        for node in nodes:
+            file_path = node['file'].evaluate() # 変数展開済みパス
+            
+            # v001 などのバージョン表記を探す
+            # パターン: vに続く数字
+            version_match = re.search(r'[vV](\d+)', file_path)
+            if not version_match:
+                continue
+                
+            current_ver_str = version_match.group(1)
+            current_ver_int = int(current_ver_str)
+            padding = len(current_ver_str)
+            
+            # ディレクトリ内のファイルをスキャンして最大バージョンを探す
+            directory = os.path.dirname(file_path)
+            if not os.path.exists(directory):
+                # ファイルパス自体がディレクトリ構造を含んでいる場合(連番フォルダなど)の考慮も必要だが
+                # ここでは単純化して親ディレクトリを見る
+                continue
+
+            # 同じパターンのファイルを探す
+            # 例: shot_v001.exr -> shot_v*.exr
+            # 単純なglobだと誤爆するので、バージョン部分をワイルドカードにして検索
+            prefix = file_path[:version_match.start()]
+            suffix = file_path[version_match.end():]
+            
+            # 検索用パターン構築 (v*)
+            search_pattern = f"{prefix}[vV]*{suffix}"
+            
+            # globはOS依存なので、Nukeのパス区切りをOSに合わせる必要がある場合も
+            # ここでは簡易実装
+            candidates = []
+            
+            # ※注意: 連番ファイル(####)の場合、globでは見つからないため
+            # 親フォルダ自体のバージョンアップか、ファイル名のバージョンアップかを判定する必要がある
+            # 今回は「ファイル名に含まれるバージョン」をインクリメントして存在確認する手法をとる（高速）
+            
+            found_higher = False
+            next_ver_int = current_ver_int
+            
+            # 次のバージョンが存在するか順番にチェック（無限ループ防止で上限+10くらい）
+            for i in range(1, 20):
+                check_ver_int = current_ver_int + i
+                check_ver_str = f"{check_ver_int:0{padding}d}"
+                
+                # 新しいパス候補を作成
+                new_path = f"{prefix}v{check_ver_str}{suffix}"
+                
+                # ファイルが存在するか？ (連番の場合は #### があるので os.path.exists は使えない)
+                # nuke.getFileNameList で確認するか、単純に親フォルダ内のリストを見る
+                
+                # 簡易チェック: Readノードにセットしてみてエラーが出ないか確認するのは重い。
+                # ディレクトリ内のファイルリストを取得して確認するのが確実
+                dir_files = nuke.getFileNameList(directory) or []
+                
+                # ファイル名部分だけ抽出
+                target_filename = os.path.basename(new_path)
+                
+                # 連番表記 (####) を考慮したマッチングが必要
+                # リスト内のアイテムと target_filename (これも #### を含む) を比較
+                # nuke.getFileNameListは "name.####.exr 1-100" を返すので、スペースで切る
+                
+                exists = False
+                for f in dir_files:
+                    if f.split()[0] == target_filename:
+                        exists = True
+                        break
+                
+                if exists:
+                    # 見つかったらそれを採用してさらに次を探す
+                    next_ver_int = check_ver_int
+                    found_higher = True
+                else:
+                    # 連続性が途切れたら終了
+                    break
+            
+            if found_higher:
+                new_ver_str = f"{next_ver_int:0{padding}d}"
+                final_path = f"{prefix}v{new_ver_str}{suffix}"
+                node['file'].setValue(final_path)
+                print(f"[Flux Loader] Updated {node.name()}: v{current_ver_str} -> v{new_ver_str}")
+                updated_count += 1
+
+        if updated_count > 0:
+            nuke.message(f"Updated {updated_count} Read nodes to latest versions.")
+        else:
+            nuke.message("No newer versions found for selected nodes.")
 
 def show_dialog():
     FluxLoader().show()
