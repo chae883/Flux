@@ -2,11 +2,10 @@ import nuke
 import os
 import config
 
-def convert_to_relative():
+def convert_to_env_absolute():
     """
-    [TD Feedback Fix]
-    かつては相対パス化するツールでしたが、
-    スタジオパイプライン向けに「環境変数を使った絶対パス化」ツールに生まれ変わりました。
+    [Flux Path Resolver]
+    選択したノードのファイルパスを、環境変数 FLUX_ROOT を使用した絶対パス形式に変換します。
     
     変換前: D:/Studio/WIP/private/TMP/shot010/plates/plate_v01.exr
     変換後: [getenv FLUX_ROOT]/private/TMP/shot010/plates/plate_v01.exr

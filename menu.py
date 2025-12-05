@@ -1,6 +1,6 @@
 import nuke
 import flux_env
-import set_defaults # New defaults loader
+import set_defaults
 
 # ------------------------------------------------------------------------------
 # Auto Actions
@@ -40,8 +40,9 @@ m.addSeparator()
 # --- Sub Menu: Utils ---
 utils_menu = m.addMenu('Utils')
 
+# ★ 更新箇所: relative_path -> resolve_path
 utils_menu.addCommand('Absolutize Paths (Env Var)', 
-                      'import relative_path; relative_path.convert_to_relative()')
+                      'import resolve_path; resolve_path.convert_to_env_absolute()')
 
 utils_menu.addCommand('Node Inspector', 
                       'import node_inspector; node_inspector.dump_node_info()')
