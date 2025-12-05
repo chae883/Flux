@@ -3,7 +3,7 @@ import nukescripts
 import os
 import subprocess
 import config
-import flux_env # New
+import flux_env
 
 class FluxMakeOfficial(nukescripts.PythonPanel):
     def __init__(self):
@@ -61,7 +61,10 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
         shot_name = f"{project}_{seq}_{shot}"
         project_root = os.path.join(self.base_root, context, project)
         shot_dir = os.path.join(project_root, shot_name)
-        script_dir = os.path.join(shot_dir, 'scripts')
+        
+        # TD Update: Save into 'scripts/work' by default
+        script_dir = os.path.join(shot_dir, 'scripts', 'work')
+        
         file_name = f"{shot_name}_comp_v001.nk"
         full_path = os.path.join(script_dir, file_name).replace('\\', '/')
         
@@ -86,6 +89,10 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
                 if not os.path.exists(path_to_make):
                     os.makedirs(path_to_make)
             
+            # Ensure the specific work script dir exists (it might be nested in the config structure)
+            if not os.path.exists(script_dir):
+                os.makedirs(script_dir)
+
             save_path = full_path.replace('\\', '/')
             if os.path.exists(save_path):
                 if not nuke.ask(f"File already exists:\n{save_path}\n\nOverwrite?"):
@@ -93,7 +100,6 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
             
             nuke.scriptSaveAs(save_path)
             
-            # ★ 環境変数を即座に更新
             flux_env.update_env_from_script()
             
             if self.open_ap_k.value():

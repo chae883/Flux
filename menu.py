@@ -15,6 +15,7 @@ m.addCommand('Make Official', 'import make_official; make_official.show_dialog()
 m.addCommand('Flux Loader', 'import loader; loader.show_dialog()', 'shift+r')
 m.addSeparator()
 m.addCommand('Version Up', 'import version_up; version_up.run()')
+m.addCommand('Publish Script', 'import publisher; publisher.publish_current_script()', 'shift+p')
 m.addCommand('Create Flux Write', 'import smart_write; smart_write.create_flux_write()')
 m.addSeparator()
 

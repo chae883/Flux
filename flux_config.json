@@ -22,6 +22,8 @@
         "ocio_config_path": "fn-nuke_studio-config-v1.0.0_aces-v1.3_ocio-v2.1",
         "folder_structure": [
             "scripts",
+            "scripts/work",
+            "scripts/published",
             "renders",
             "plates",
             "ref"
