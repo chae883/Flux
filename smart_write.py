@@ -6,6 +6,7 @@ import datetime
 import config
 import validator
 import flux_env
+import traceback
 
 # ------------------------------------------------------------------------------
 # PATH CALCULATION (Edit-Time Baking)
@@ -19,39 +20,27 @@ def get_script_version():
     script_name = nuke.root().name()
     if script_name == 'Root': return None
     
-    # Simple regex for _v001 or v001 pattern
+    # 正規表現で _v001 または v001 のパターンを探す
     match = re.search(r'[vV](\d+)', os.path.basename(script_name))
     if match:
-        # Return formatted string "v001"
+        # v001 の形式で返す
         return f"v{int(match.group(1)):03d}"
     return None
 
 def get_write_path(node=None):
-    """
-    Calculates the file path for the Write node.
-    Returns a string containing TCL variables (e.g., [getenv FLUX_ROOT])
-    to ensure portability across render farms and OS.
-    """
     if node is None:
         try:
             node = nuke.thisNode()
-            if node.name() == 'Write_Internal':
-                node = node.parent()
-        except:
-            return ""
+            if node.name() == 'Write_Internal': node = node.parent()
+        except: return ""
 
-    # Ensure context is available for calculation
     if not os.environ.get('FLUX_PROJECT'):
         flux_env.update_env_from_script()
 
-    # --- 1. Root Abstraction ---
     root_path = "[getenv FLUX_ROOT]"
-    
-    # --- 2. Context Retrieval ---
     project = os.environ.get('FLUX_PROJECT', 'Unknown')
     shot = os.environ.get('FLUX_SHOT', 'Unknown')
     
-    # Fallback for unsaved scripts
     if project == 'Unknown' or shot == 'Unknown':
         return f"{root_path}/_UNSAVED_/{shot}/renders/unknown.exr"
 
@@ -61,32 +50,29 @@ def get_write_path(node=None):
         raw_lbl = node['render_label'].value()
         use_local_ver = node['use_local_version'].value()
         local_ver_int = int(node['local_version'].value())
-    except:
-        return ""
+    except: return ""
 
-    # --- 3. Filename Logic ---
+    # --- Filename Logic ---
     cat_str = 'elm' if raw_cat == 'element' else ('' if raw_cat == '(Main)' else raw_cat)
     lbl_str = sanitize_text(raw_lbl)
     
     # VERSION LOGIC CHANGE: Strict Mode check
     ver_str = ""
     
+    # メインのレンダリングかつ、厳格モードの場合
     if config.ENFORCE_VERSION_MATCH and raw_cat == '(Main)':
-        # Strict Mode: Main renders MUST match script version
         script_ver = get_script_version()
         if script_ver:
+            # スクリプトのバージョンを強制使用
             ver_str = script_ver
         else:
-            # Fallback if script has no version (e.g., "shot_test.nk")
-            # We default to local version to avoid breaking renders
+            # スクリプトにバージョンがない場合（shot_test.nkなど）はローカルバージョンをフォールバックとして使う
             ver_str = f"v{local_ver_int:03d}"
     else:
-        # Legacy/Flexible Mode or Non-Main (e.g. Precomps)
-        # Use Local Version if enabled
+        # Precompや素材出しなど、スクリプトと一致しなくていい場合
         if use_local_ver:
             ver_str = f"v{local_ver_int:03d}"
     
-    # Construct Filename Base: shot_variant_label_version
     parts = [shot]
     if cat_str: parts.append(cat_str)
     if lbl_str: parts.append(lbl_str)
@@ -94,24 +80,16 @@ def get_write_path(node=None):
     
     filename_base = "_".join(parts)
     
-    # --- 4. Directory Structure Construction ---
-    # Structure: ROOT / Context / Project / Shot / ...
     user_context = config.DEFAULT_CONTEXT 
-    
-    # We construct the base directory using the Abstract Root
     shot_dir = f"{root_path}/{user_context}/{project}/{shot}"
 
     path = ""
     if mode == 'Master (EXR)':
         ext = "exr"
-        # Path: .../shot/renders/filename/filename.####.exr
         path = f"{shot_dir}/renders/{filename_base}/{filename_base}.%04d.{ext}"
-        
     elif mode == 'Review (MOV)':
         ext = "mov"
-        # Path: .../shot/renders/dailies/filename.mov
         path = f"{shot_dir}/renders/dailies/{filename_base}.{ext}"
-        
     elif mode == 'Temp (JPG)':
         ext = "jpg"
         temp_root = "[getenv FLUX_TEMP]" 
@@ -128,15 +106,10 @@ def sanitize_text(text):
 # ------------------------------------------------------------------------------
 
 def update_flux_write(node=None):
-    """
-    Triggered on KnobChanged.
-    Calculates the path string (Edit-Time Baking) and sets it to the File knob.
-    """
     if node is None:
         try: node = nuke.thisNode()
         except: return
 
-    # 1. Update the File Path (The Core Logic Change)
     with node:
         w = nuke.toNode('Write_Internal')
         if w:
@@ -144,32 +117,25 @@ def update_flux_write(node=None):
             if w['file'].value() != new_path_str:
                 w['file'].setValue(new_path_str)
 
-    # 2. UI Visibility & Format Logic
     try:
         mode = node['render_mode'].value()
         raw_cat = node['render_variant'].value()
         is_main = (raw_cat == '(Main)')
         
-        # Local Versioning Controls
         k_grp = [node.knob('use_local_version'), node.knob('ver_down'), node.knob('local_version'), node.knob('ver_up')]
         
-        # Logic: If Strict Mode is ON and it's a Main render, hide local version controls.
-        # The version is driven by the script name.
+        # UI制御: Strict Modeの時はローカルバージョン操作を隠す
         if is_main:
             if config.ENFORCE_VERSION_MATCH:
-                # STRICT: Hide all local controls. Script version is king.
+                # STRICT: 全て隠して「Script Version」であることを明示
                 for k in k_grp: k.setVisible(False)
-                # Show script version up button as the primary action
                 node.knob('script_ver_up').setVisible(True)
                 node.knob('render_now').setLabel("Render (Script Ver)")
             else:
-                # FLEXIBLE: Allow toggling local version
-                # But typically main renders shouldn't have local versions anyway
                 for k in k_grp: k.setVisible(False) 
                 node.knob('script_ver_up').setVisible(True)
                 node.knob('render_now').setLabel("Render (Main)")
         else:
-            # Precomps/Elements: Local versioning is allowed/encouraged
             for k in k_grp: k.setVisible(True)
             node.knob('script_ver_up').setVisible(False)
             node.knob('render_now').setLabel("Render (Auto-Inc)" if node['use_local_version'].value() else "Render (Current)")
@@ -250,16 +216,14 @@ def apply_format_settings(node, w, mode):
 def render_with_auto_increment():
     node = nuke.thisNode()
     
-    # Auto-Increment Logic
     try:
         raw_cat = node['render_variant'].value()
         is_main = (raw_cat == '(Main)')
         
-        # If Strict Mode is ON and Main render, we NEVER auto-increment local version.
+        # Strict Modeの場合は自動インクリメントしない（スクリプトバージョンに従うため）
         if config.ENFORCE_VERSION_MATCH and is_main:
-            pass # Version comes from script name
+            pass 
         else:
-            # Precomps or Flexible Mode
             if not is_main and node['use_local_version'].value():
                 ver_k = node['local_version']
                 ver_k.setValue(int(ver_k.value()) + 1)

@@ -2,80 +2,87 @@ import json
 import os
 import nuke
 
-# 設定ファイルのパス
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'flux_config.json')
-
-_config_data = {}
-
-def load_config():
-    global _config_data
-    if not os.path.exists(CONFIG_FILE):
-        msg = f"[Flux Error] Config file not found at: {CONFIG_FILE}"
-        if nuke.GUI:
-            print(msg)
-        return
-
-    try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            _config_data = json.load(f)
-    except Exception as e:
-        print(f"[Flux Error] Failed to parse config JSON: {e}")
-
-# 初回ロード
-load_config()
-
-# ヘルパー関数
-def get(section, key, default=None):
-    return _config_data.get(section, {}).get(key, default)
-
-def get_path(key, default=None):
-    # 環境変数を優先 (FLUX_KEY)
-    env_key = f"FLUX_{key.upper()}"
-    if env_key in os.environ:
-        return os.environ[env_key].replace('\\', '/')
+class FluxConfig:
+    _instance = None
     
-    # JSONから取得して展開
-    raw_path = _config_data.get('paths', {}).get(key, default)
-    if raw_path:
-        raw_path = raw_path.replace('\\', '/')
-        return os.path.expandvars(raw_path)
-    return default
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(FluxConfig, cls).__new__(cls)
+            cls._instance.load()
+        return cls._instance
 
-# --- Global Config Variables (安全に定義) ---
+    def __init__(self):
+        pass
 
-WEBHOOK_URL = get('general', 'webhook_url', '')
-PLAYER_PATH = get_path('player_executable', '')
-FILE_EXPLORER_PATH = get_path('file_explorer_executable', '')
+    def load(self):
+        self.config_path = os.path.join(os.path.dirname(__file__), 'flux_config.json')
+        self.data = {}
+        
+        if not os.path.exists(self.config_path):
+            self.log_error(f"Config file not found at: {self.config_path}")
+            return
 
-# Project Defaults
-# 環境変数を最優先、次にJSON、最後にハードコードされたデフォルト
-BASE_ROOT = os.environ.get('FLUX_ROOT', get_path('base_root', "D:/Studio/WIP"))
-ANCHORPOINT_PATH = get_path('anchorpoint_executable', "")
-FOLDER_STRUCTURE = get('project_defaults', 'folder_structure', ['scripts', 'renders', 'plates', 'ref'])
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                self.data = json.load(f)
+        except Exception as e:
+            self.log_error(f"Failed to parse config JSON: {e}")
 
-DEFAULT_FORMAT = get('project_defaults', 'format', '4K_DCP')
-DEFAULT_WIDTH = get('project_defaults', 'width', 4096)
-DEFAULT_HEIGHT = get('project_defaults', 'height', 2160)
-DEFAULT_FPS = get('project_defaults', 'fps', 24.0)
-DEFAULT_START = get('project_defaults', 'frame_start', 1001)
-DEFAULT_END = get('project_defaults', 'frame_end', 1100)
-DEFAULT_CONTEXT = get('project_defaults', 'context', 'private')
-DEFAULT_PROJECT = get('project_defaults', 'project_code', 'TMP')
-DEFAULT_OCIO_CONFIG = get('project_defaults', 'ocio_config_path', 'nuke-default')
+    def get(self, section, key, default=None):
+        return self.data.get(section, {}).get(key, default)
 
-# Strict Versioning Rule
-ENFORCE_VERSION_MATCH = get('project_defaults', 'enforce_script_version_match', True)
+    def get_path(self, key, default=None):
+        env_key = f"FLUX_{key.upper()}"
+        if env_key in os.environ:
+            return os.environ[env_key].replace('\\', '/')
+        
+        raw_path = self.data.get('paths', {}).get(key, default)
+        if raw_path:
+            raw_path = raw_path.replace('\\', '/')
+            return os.path.expandvars(raw_path)
+        return default
 
-# Render Settings
-RENDER_EXR = get('render_settings', 'exr', {})
-RENDER_MOV = get('render_settings', 'mov', {})
-RENDER_JPG = get('render_settings', 'jpg', {})
+    def get_webhook_url(self):
+        env_url = os.environ.get("FLUX_DISCORD_WEBHOOK")
+        if env_url: return env_url
+        return self.get('general', 'webhook_url', '')
 
-# Temp Paths
-TEMP_WINDOWS = os.environ.get('FLUX_TEMP', get_path('temp_windows', "C:/Temp"))
-TEMP_LINUX = os.environ.get('FLUX_TEMP', get_path('temp_linux', "/tmp"))
+    def log_error(self, message):
+        formatted_msg = f"[Flux Config Error] {message}"
+        if nuke.GUI: print(formatted_msg)
+        else: print(formatted_msg)
 
-# Loader Settings
+conf = FluxConfig()
+
+# --- Public API ---
+WEBHOOK_URL = conf.get_webhook_url()
+PLAYER_PATH = conf.get_path('player_executable', '')
+FILE_EXPLORER_PATH = conf.get_path('file_explorer_executable', '')
+
+BASE_ROOT = os.environ.get('FLUX_ROOT', conf.get_path('base_root', "D:/Studio/WIP"))
+ANCHORPOINT_PATH = conf.get_path('anchorpoint_executable', "")
+FOLDER_STRUCTURE = conf.get('project_defaults', 'folder_structure', ['scripts', 'renders', 'plates', 'ref'])
+
+DEFAULT_FORMAT = conf.get('project_defaults', 'format', '4K_DCP')
+DEFAULT_WIDTH = conf.get('project_defaults', 'width', 4096)
+DEFAULT_HEIGHT = conf.get('project_defaults', 'height', 2160)
+DEFAULT_FPS = conf.get('project_defaults', 'fps', 24.0)
+DEFAULT_START = conf.get('project_defaults', 'frame_start', 1001)
+DEFAULT_END = conf.get('project_defaults', 'frame_end', 1100)
+DEFAULT_CONTEXT = conf.get('project_defaults', 'context', 'private')
+DEFAULT_PROJECT = conf.get('project_defaults', 'project_code', 'TMP')
+DEFAULT_OCIO_CONFIG = conf.get('project_defaults', 'ocio_config_path', 'nuke-default')
+
+# Strict Versioning Rule (NEW)
+ENFORCE_VERSION_MATCH = conf.get('project_defaults', 'enforce_script_version_match', True)
+
+RENDER_EXR = conf.get('render_settings', 'exr', {})
+RENDER_MOV = conf.get('render_settings', 'mov', {})
+RENDER_JPG = conf.get('render_settings', 'jpg', {})
+
+TEMP_WINDOWS = os.environ.get('FLUX_TEMP', conf.get_path('temp_windows', "C:/Temp"))
+TEMP_LINUX = os.environ.get('FLUX_TEMP', conf.get_path('temp_linux', "/tmp"))
+
 _default_cs_map = {".exr": "ACES - ACEScg", ".jpg": "Output - sRGB", ".mov": "Output - Rec.709"}
-LOADER_COLORSPACE_MAP = get('loader_rules', 'colorspace_overrides', _default_cs_map)
-LOADER_DISABLE_POSTAGE_STAMP = get('loader_rules', 'disable_postage_stamp', True)
+LOADER_COLORSPACE_MAP = conf.get('loader_rules', 'colorspace_overrides', _default_cs_map)
+LOADER_DISABLE_POSTAGE_STAMP = conf.get('loader_rules', 'disable_postage_stamp', True)

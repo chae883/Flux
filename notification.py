@@ -7,31 +7,26 @@ import datetime
 import requests
 import json
 import config
+import version_up 
 
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 
-# Import the NEW clean UI class
 from ui_notif_panel import Ui_MainWindow
 
-# --- Configuration (From config.py) ---
 WEBHOOK_URL = config.WEBHOOK_URL
 PLAYER_PATH = config.PLAYER_PATH
 FILE_EXPLORER_PATH = config.FILE_EXPLORER_PATH
 
-# --- Notification Logic ---
-
 def send_discord_notification(fields):
-    """Builds and sends a GREEN success embed to Discord."""
     if not WEBHOOK_URL:
-        # TD Feedback: 警告を出すが、処理は止める
-        print("[Flux Info] Discord Notification skipped: Webhook URL not set in environment (FLUX_DISCORD_WEBHOOK).")
+        print("[Flux Info] Discord Notification skipped: Webhook URL not set.")
         return
 
     embed = {
         "title": "✅ Render Finished!",
-        "color": 3066993, # Green
+        "color": 3066993,
         "fields": fields,
         "footer": {"text": f"Flux Pipeline | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
     }
@@ -43,8 +38,6 @@ def send_discord_notification(fields):
         response.raise_for_status()
     except Exception as e:
         print(f"[Flux Warning] Discord send failed: {e}")
-
-# --- UI Class ---
 
 class FluxNotificationPanel(QMainWindow):
     def __init__(self, write_node, duration_str):
@@ -73,6 +66,35 @@ class FluxNotificationPanel(QMainWindow):
         script_name = os.path.basename(nuke.root().name())
         self.ui.label_project.setText(script_name)
         self.ui.label_duration.setText(f"Duration: {duration_str}")
+
+        # ★ Auto Version Up Trigger
+        # パネルが表示されて少し経ったら自動実行、あるいは即時実行
+        # ここでは「チェックが入っていたら実行して、パネルに結果を表示」する形にする
+        # ただし、UIを表示した直後に実行するとユーザーがびっくりするので、
+        # Timerを使って一瞬待つか、あるいはユーザーが「チェックを外す隙」を与えるかどうか。
+        # 「忘れるから自動で」という要望なので、即時実行で良いでしょう。
+        
+        if self.ui.checkBox_AutoVerUp.isChecked():
+            # 少しだけ遅延させて実行（UI描画を優先）
+            QTimer.singleShot(500, self.auto_version_up)
+
+    def auto_version_up(self):
+        # チェックが外されていたら中止（500msの間に外した場合）
+        if not self.ui.checkBox_AutoVerUp.isChecked():
+            return
+            
+        try:
+            # ユーザーに「やったよ！」と見せるためにボタンの色を変えたりテキストを変えたりする
+            self.ui.checkBox_AutoVerUp.setText("Auto Version Up: Done! (Saved vNext)")
+            self.ui.checkBox_AutoVerUp.setStyleSheet("color: rgb(0, 170, 127); font-weight: bold;")
+            self.ui.checkBox_AutoVerUp.setEnabled(False) # 二重実行防止
+            
+            # 実際の処理
+            version_up.run()
+            
+        except Exception as e:
+            self.ui.checkBox_AutoVerUp.setText(f"Auto Version Up Failed: {e}")
+            self.ui.checkBox_AutoVerUp.setStyleSheet("color: rgb(200, 80, 80); font-weight: bold;")
 
     def open_render_directory(self):
         path_raw = nuke.filename(self.Write_node)
@@ -149,7 +171,6 @@ def show_notification(write_node, start_time, first_frame, last_frame):
         avg_time_str = f"{avg:.2f}s"
 
     script_name = os.path.basename(nuke.root().name())
-    
     render_path_raw = nuke.filename(write_node)
     render_path = nuke.tcl('subst', render_path_raw)
     filename = os.path.basename(render_path)
