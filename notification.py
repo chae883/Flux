@@ -6,12 +6,13 @@ import subprocess
 import datetime
 import requests
 import json
-import config  # Updated config loader
+import config
 
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 from PySide6.QtWidgets import *
 
+# Import the NEW clean UI class
 from ui_notif_panel import Ui_MainWindow
 
 # --- Configuration (From config.py) ---
@@ -51,8 +52,8 @@ class FluxNotificationPanel(QMainWindow):
         self.ui.setupUi(self)
         self.Write_node = write_node
         
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        # --- Window Effect Setup ---
+        # Note: Some effects handled in ui_notif_panel.py now (translucency)
         
         self.op_effect = QGraphicsOpacityEffect(self)
         self.op_effect.setOpacity(0.95)
@@ -63,29 +64,33 @@ class FluxNotificationPanel(QMainWindow):
         self.shadow.setColor(QColor(0, 0, 0, 100))
         self.ui.frame.setGraphicsEffect(self.shadow)
         
+        # Center on Screen
         screen = QApplication.primaryScreen().geometry()
         self.move(int(screen.center().x() - self.width()/2.0), int(screen.center().y() - self.height()/2.0))
         
+        # Connect Signals
         self.ui.pushButton_close.clicked.connect(self.close)
-        self.ui.pushButton_2.clicked.connect(self.open_render_directory)
-        self.ui.pushButton_3.clicked.connect(self.open_render_file)
+        self.ui.pushButton_folder.clicked.connect(self.open_render_directory)
+        self.ui.pushButton_file.clicked.connect(self.open_render_file)
+        self.ui.pushButton_CreateRead.clicked.connect(self.create_read_node)
         
-        if hasattr(self.ui, 'pushButton_CreateRead'):
-            self.ui.pushButton_CreateRead.clicked.connect(self.create_read_node)
-        
+        # Set Data
         script_name = os.path.basename(nuke.root().name())
-        self.ui.label_project_name.setText(script_name)
-        self.ui.label_version.setText(f"Flux Pipeline | Duration: {duration_str}")
+        self.ui.label_project.setText(script_name)
+        self.ui.label_duration.setText(f"Duration: {duration_str}")
 
     def open_render_directory(self):
-        path = nuke.filename(self.Write_node)
-        if path:
+        # We need to resolve the path because it might contain [getenv] variables now
+        path_raw = nuke.filename(self.Write_node)
+        if path_raw:
+            path = nuke.tcl('subst', path_raw) # Resolve TCL vars
             dir_path = os.path.dirname(path)
             self.open_explorer(dir_path)
 
     def open_render_file(self):
-        path = nuke.filename(self.Write_node)
-        if path:
+        path_raw = nuke.filename(self.Write_node)
+        if path_raw:
+            path = nuke.tcl('subst', path_raw) # Resolve TCL vars
             self.open_player(path)
 
     def open_explorer(self, path):
@@ -107,16 +112,21 @@ class FluxNotificationPanel(QMainWindow):
                 subprocess.Popen(["open" if platform.system() == "Darwin" else "xdg-open", path])
 
     def create_read_node(self):
-        file_path = nuke.filename(self.Write_node)
-        if not file_path: return
+        file_path_raw = nuke.filename(self.Write_node)
+        if not file_path_raw: return
 
+        # For Read node, we prefer the abstract path (farm safe) if possible,
+        # but Nuke Read nodes handle [getenv] natively, so passing the raw value is perfect.
+        # file_path_raw is already the string from the Write node knob.
+        
         read = nuke.createNode("Read")
-        read['file'].fromUserText(file_path)
+        read['file'].fromUserText(file_path_raw)
         
         first = int(nuke.root()["first_frame"].getValue())
         last = int(nuke.root()["last_frame"].getValue())
         
-        if "%" in file_path or "#" in file_path:
+        # Check for frame padding symbols in the raw string
+        if "%" in file_path_raw or "#" in file_path_raw:
             read['first'].setValue(first)
             read['last'].setValue(last)
             read['origfirst'].setValue(first)
@@ -150,7 +160,10 @@ def show_notification(write_node, start_time, first_frame, last_frame):
         avg_time_str = f"{avg:.2f}s"
 
     script_name = os.path.basename(nuke.root().name())
-    render_path = nuke.filename(write_node)
+    
+    # Resolve filename for display in Discord
+    render_path_raw = nuke.filename(write_node)
+    render_path = nuke.tcl('subst', render_path_raw)
     filename = os.path.basename(render_path)
     
     fields = [
