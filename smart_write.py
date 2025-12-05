@@ -9,21 +9,14 @@ import flux_env
 import traceback
 
 # ------------------------------------------------------------------------------
-# PATH CALCULATION (Edit-Time Baking)
+# PATH CALCULATION
 # ------------------------------------------------------------------------------
 
 def get_script_version():
-    """
-    Extracts version string (v###) from the current script name.
-    Returns None if no version found or script not saved.
-    """
     script_name = nuke.root().name()
     if script_name == 'Root': return None
-    
-    # 正規表現で _v001 または v001 のパターンを探す
     match = re.search(r'[vV](\d+)', os.path.basename(script_name))
     if match:
-        # v001 の形式で返す
         return f"v{int(match.group(1)):03d}"
     return None
 
@@ -52,24 +45,26 @@ def get_write_path(node=None):
         local_ver_int = int(node['local_version'].value())
     except: return ""
 
-    # --- Filename Logic ---
     cat_str = 'elm' if raw_cat == 'element' else ('' if raw_cat == '(Main)' else raw_cat)
     lbl_str = sanitize_text(raw_lbl)
     
-    # VERSION LOGIC CHANGE: Strict Mode check
+    # --- Version Logic ---
     ver_str = ""
+    is_main = (raw_cat == '(Main)')
     
-    # メインのレンダリングかつ、厳格モードの場合
-    if config.ENFORCE_VERSION_MATCH and raw_cat == '(Main)':
+    # Determine Enforcement
+    # 1. Main Render + Strict Mode = Enforce
+    # 2. All Render Strict Mode = Enforce
+    should_enforce = (config.ENFORCE_VERSION_MATCH and is_main) or config.ENFORCE_ALL_VERSIONS
+    
+    if should_enforce:
         script_ver = get_script_version()
         if script_ver:
-            # スクリプトのバージョンを強制使用
             ver_str = script_ver
         else:
-            # スクリプトにバージョンがない場合（shot_test.nkなど）はローカルバージョンをフォールバックとして使う
             ver_str = f"v{local_ver_int:03d}"
     else:
-        # Precompや素材出しなど、スクリプトと一致しなくていい場合
+        # Flexible Mode
         if use_local_ver:
             ver_str = f"v{local_ver_int:03d}"
     
@@ -102,7 +97,7 @@ def sanitize_text(text):
     return re.sub(r'[^a-zA-Z0-9_\-]', '', text)
 
 # ------------------------------------------------------------------------------
-# UI UPDATE & SETUP
+# UI UPDATE
 # ------------------------------------------------------------------------------
 
 def update_flux_write(node=None):
@@ -124,21 +119,26 @@ def update_flux_write(node=None):
         
         k_grp = [node.knob('use_local_version'), node.knob('ver_down'), node.knob('local_version'), node.knob('ver_up')]
         
-        # UI制御: Strict Modeの時はローカルバージョン操作を隠す
-        if is_main:
-            if config.ENFORCE_VERSION_MATCH:
-                # STRICT: 全て隠して「Script Version」であることを明示
-                for k in k_grp: k.setVisible(False)
-                node.knob('script_ver_up').setVisible(True)
-                node.knob('render_now').setLabel("Render (Script Ver)")
-            else:
+        should_enforce = (config.ENFORCE_VERSION_MATCH and is_main) or config.ENFORCE_ALL_VERSIONS
+
+        if should_enforce:
+            # STRICT: Local controls hidden
+            for k in k_grp: k.setVisible(False)
+            node.knob('script_ver_up').setVisible(True)
+            # ラベルで状態を明示 (Script Ver)
+            node.knob('render_now').setLabel("Render (Script Ver)")
+        else:
+            # FLEXIBLE: Local controls shown
+            if is_main:
+                # Main but flexible (Rare config)
                 for k in k_grp: k.setVisible(False) 
                 node.knob('script_ver_up').setVisible(True)
                 node.knob('render_now').setLabel("Render (Main)")
-        else:
-            for k in k_grp: k.setVisible(True)
-            node.knob('script_ver_up').setVisible(False)
-            node.knob('render_now').setLabel("Render (Auto-Inc)" if node['use_local_version'].value() else "Render (Current)")
+            else:
+                # Precomps / Elements
+                for k in k_grp: k.setVisible(True)
+                node.knob('script_ver_up').setVisible(False)
+                node.knob('render_now').setLabel("Render (Auto-Inc)" if node['use_local_version'].value() else "Render (Current)")
 
         is_mov = (mode == 'Review (MOV)')
         node.knob('use_burnin').setVisible(is_mov)
@@ -220,9 +220,11 @@ def render_with_auto_increment():
         raw_cat = node['render_variant'].value()
         is_main = (raw_cat == '(Main)')
         
-        # Strict Modeの場合は自動インクリメントしない（スクリプトバージョンに従うため）
-        if config.ENFORCE_VERSION_MATCH and is_main:
-            pass 
+        # Enforce Logic Check
+        should_enforce = (config.ENFORCE_VERSION_MATCH and is_main) or config.ENFORCE_ALL_VERSIONS
+
+        if should_enforce:
+            pass # Script version driven
         else:
             if not is_main and node['use_local_version'].value():
                 ver_k = node['local_version']
@@ -254,7 +256,6 @@ def render_with_auto_increment():
         if "Cancelled" not in str(e):
             nuke.message(f"Render Error:\n{e}")
 
-# Helper wrappers
 def local_version_up(node):
     k = node['local_version']
     k.setValue(int(k.value()) + 1)
@@ -322,7 +323,6 @@ def create_flux_write():
     k_ren.setFlag(nuke.STARTLINE)
     group.addKnob(k_ren)
     
-    # Path Revealer
     open_code = "import os, sys, subprocess; n=nuke.thisNode(); w=nuke.toNode('Write_Internal'); p=nuke.tcl('subst', w['file'].value()); f=os.path.dirname(p); os.startfile(f) if sys.platform=='win32' else subprocess.Popen(['open', f]) if sys.platform=='darwin' else subprocess.Popen(['xdg-open', f])"
     group.addKnob(nuke.PyScript_Knob('reveal', 'Open Folder', open_code))
 

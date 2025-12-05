@@ -73,8 +73,9 @@ DEFAULT_CONTEXT = conf.get('project_defaults', 'context', 'private')
 DEFAULT_PROJECT = conf.get('project_defaults', 'project_code', 'TMP')
 DEFAULT_OCIO_CONFIG = conf.get('project_defaults', 'ocio_config_path', 'nuke-default')
 
-# Strict Versioning Rule (NEW)
+# Strict Versioning Rules (TD Feedback: Default to True for safety)
 ENFORCE_VERSION_MATCH = conf.get('project_defaults', 'enforce_script_version_match', True)
+ENFORCE_ALL_VERSIONS = conf.get('project_defaults', 'enforce_all_render_versions', True)
 
 RENDER_EXR = conf.get('render_settings', 'exr', {})
 RENDER_MOV = conf.get('render_settings', 'mov', {})

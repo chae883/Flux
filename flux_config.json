@@ -21,6 +21,7 @@
         "project_code": "TMP",
         "ocio_config_path": "fn-nuke_studio-config-v1.0.0_aces-v1.3_ocio-v2.1",
         "enforce_script_version_match": true,
+        "enforce_all_render_versions": true,
         "folder_structure": [
             "scripts",
             "scripts/work",
