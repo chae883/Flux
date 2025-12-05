@@ -1,11 +1,15 @@
 import nuke
-import flux_env # New environment manager
+import flux_env
+import set_defaults # New defaults loader
 
 # ------------------------------------------------------------------------------
-# Context Auto-Detection
+# Auto Actions
 # ------------------------------------------------------------------------------
-# スクリプトを開いた時に自動で環境変数をセットする
+# コンテキスト自動判定
 nuke.addOnScriptLoad(flux_env.update_env_from_script)
+
+# デフォルト設定の適用 (新規スクリプト時)
+nuke.addOnScriptLoad(set_defaults.apply_defaults)
 
 # ------------------------------------------------------------------------------
 # 1. Main Menu
@@ -36,7 +40,7 @@ m.addSeparator()
 # --- Sub Menu: Utils ---
 utils_menu = m.addMenu('Utils')
 
-utils_menu.addCommand('Make Paths Relative', 
+utils_menu.addCommand('Absolutize Paths (Env Var)', 
                       'import relative_path; relative_path.convert_to_relative()')
 
 utils_menu.addCommand('Node Inspector', 
