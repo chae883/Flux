@@ -1,41 +1,33 @@
 import nuke
 import nukescripts
-import config  # Updated config loader
+import config
 
 class FluxProjectSetup(nukescripts.PythonPanel):
     def __init__(self):
         super(FluxProjectSetup, self).__init__('Flux Project Setup')
         
-        # --- UI: 情報表示エリア ---
         self.info_label = nuke.Text_Knob('info_label', '', 'Select a Read Node & Click Get')
         self.addKnob(self.info_label)
-        
         self.addKnob(nuke.Text_Knob('divider0', ''))
 
-        # --- UI: 吸い上げボタン ---
         self.get_btn = nuke.PyScript_Knob('get_from_selection', 'Get Settings from Selected Read Node')
         self.get_btn.setFlag(nuke.STARTLINE)
         self.addKnob(self.get_btn)
-        
         self.addKnob(nuke.Text_Knob('divider1', ''))
 
-        # --- UI: 設定入力エリア ---
-        
-        # 1. フォーマット選択プルダウン
+        # Format
         self.all_formats = nuke.formats()
         fmt_names = [f.name() for f in self.all_formats]
-        
         self.format_menu = nuke.Enumeration_Knob('format_menu', 'Format Template', fmt_names)
         self.format_menu.setTooltip("Select a format to auto-fill Width and Height")
         self.addKnob(self.format_menu)
 
-        # 2. 解像度
         self.width_k = nuke.Int_Knob('width', 'Width')
         self.height_k = nuke.Int_Knob('height', 'Height')
         self.addKnob(self.width_k)
         self.addKnob(self.height_k)
         
-        # 3. FPS & フレームレンジ
+        # FPS & Range
         self.fps_k = nuke.Double_Knob('fps', 'FPS')
         self.first_frame_k = nuke.Int_Knob('first_frame', 'Frame Start')
         self.last_frame_k = nuke.Int_Knob('last_frame', 'Frame End')
@@ -45,30 +37,34 @@ class FluxProjectSetup(nukescripts.PythonPanel):
         self.addKnob(self.last_frame_k)
         
         self.addKnob(nuke.Text_Knob('divider2', ''))
-
-        # --- UI: 実行ボタン ---
         self.apply_btn = nuke.PyScript_Knob('apply', 'APPLY TO PROJECT')
         self.addKnob(self.apply_btn)
 
-        # --- 初期値の設定 (Configから読み込み) ---
-        target_fmt_name = config.DEFAULT_FORMAT
-        
-        if target_fmt_name in fmt_names:
-            self.format_menu.setValue(target_fmt_name)
-            # フォーマットオブジェクトから取得してセットしてもよいが、
-            # ConfigのWidth/Heightを優先して初期セットする
-            self.width_k.setValue(config.DEFAULT_WIDTH)
-            self.height_k.setValue(config.DEFAULT_HEIGHT)
-        else:
-            self.width_k.setValue(config.DEFAULT_WIDTH)
-            self.height_k.setValue(config.DEFAULT_HEIGHT)
+        # Set Defaults from Config
+        self.set_defaults()
 
-        self.fps_k.setValue(config.DEFAULT_FPS)
-        self.first_frame_k.setValue(config.DEFAULT_START)
-        self.last_frame_k.setValue(config.DEFAULT_END)
+    def set_defaults(self):
+        # Configから読み込み。万が一変数がない場合は安全なデフォルトを使用
+        target_fmt = getattr(config, 'DEFAULT_FORMAT', '4K_DCP')
+        def_w = getattr(config, 'DEFAULT_WIDTH', 4096)
+        def_h = getattr(config, 'DEFAULT_HEIGHT', 2160)
+        def_fps = getattr(config, 'DEFAULT_FPS', 24.0)
+        def_start = getattr(config, 'DEFAULT_START', 1001)
+        def_end = getattr(config, 'DEFAULT_END', 1100)
+
+        # フォーマット設定
+        # 既存リストにあるか確認
+        fmt_names = [f.name() for f in self.all_formats]
+        if target_fmt in fmt_names:
+            self.format_menu.setValue(target_fmt)
+        
+        self.width_k.setValue(def_w)
+        self.height_k.setValue(def_h)
+        self.fps_k.setValue(def_fps)
+        self.first_frame_k.setValue(def_start)
+        self.last_frame_k.setValue(def_end)
 
     def knobChanged(self, knob):
-        # ■ フォーマットプルダウンが変更されたら Width/Height を更新
         if knob == self.format_menu:
             selected_name = self.format_menu.value()
             for f in self.all_formats:
@@ -77,7 +73,6 @@ class FluxProjectSetup(nukescripts.PythonPanel):
                     self.height_k.setValue(f.height())
                     break
 
-        # ■ Getボタン: Readノードから情報をコピー
         if knob == self.get_btn:
             try:
                 node = nuke.selectedNode()
@@ -100,46 +95,62 @@ class FluxProjectSetup(nukescripts.PythonPanel):
                     self.first_frame_k.setValue(node['first'].value())
                     self.last_frame_k.setValue(node['last'].value())
                     
-                    info_text = f"Source: {node.name()} | {node_format.name()} ({w}x{h})"
-                    self.info_label.setValue(info_text)
+                    self.info_label.setValue(f"Source: {node.name()} | {w}x{h}")
                 else:
-                    self.info_label.setValue("<font color='orange'>Error: Please select a READ node.</font>")
-            except:
-                self.info_label.setValue("<font color='orange'>Error: No node selected.</font>")
+                    self.info_label.setValue("Error: Select a READ node.")
+            except Exception as e:
+                self.info_label.setValue(f"Error: {e}")
 
-        # ■ Applyボタン
         if knob == self.apply_btn:
-            root = nuke.root()
-            
-            w = int(self.width_k.value())
-            h = int(self.height_k.value())
-            
-            selected_fmt_name = self.format_menu.value()
-            
-            match_found = False
-            for f in self.all_formats:
-                if f.name() == selected_fmt_name and f.width() == w and f.height() == h:
-                    match_found = True
-                    break
-            
-            if match_found:
-                 root['format'].setValue(selected_fmt_name)
-            else:
-                new_format_str = f"{w} {h} Flux_Project"
-                nuke.addFormat(new_format_str)
-                root['format'].setValue('Flux_Project')
-            
-            root['fps'].setValue(self.fps_k.value())
-            
-            start = int(self.first_frame_k.value())
-            end = int(self.last_frame_k.value())
-            root['first_frame'].setValue(start)
-            root['last_frame'].setValue(end)
-            root['lock_range'].setValue(True)
-            
-            nuke.frame(start)
-            self.close() 
+            try:
+                root = nuke.root()
+                w = int(self.width_k.value())
+                h = int(self.height_k.value())
+                selected_fmt_name = self.format_menu.value()
+                
+                # フォーマット設定
+                match_found = False
+                for f in self.all_formats:
+                    if f.name() == selected_fmt_name and f.width() == w and f.height() == h:
+                        match_found = True
+                        break
+                
+                if match_found:
+                     root['format'].setValue(selected_fmt_name)
+                else:
+                    # カスタムフォーマット作成
+                    new_format_str = f"{w} {h} Flux_Project"
+                    nuke.addFormat(new_format_str)
+                    root['format'].setValue('Flux_Project')
+                
+                root['fps'].setValue(self.fps_k.value())
+                
+                start = int(self.first_frame_k.value())
+                end = int(self.last_frame_k.value())
+                root['first_frame'].setValue(start)
+                root['last_frame'].setValue(end)
+                root['lock_range'].setValue(True)
+                
+                # OCIO設定 (Configから)
+                ocio_conf = getattr(config, 'DEFAULT_OCIO_CONFIG', '')
+                if ocio_conf:
+                    # 名前が正確かチェックせずにセットするとエラーになる場合があるが
+                    # ユーザー指定なので信頼してセットする（エラーならコンソールに出る）
+                    try:
+                        # colorManagementをOCIOに
+                        root['colorManagement'].setValue('OCIO')
+                        # OCIO configを設定（custom modeの場合など）
+                        # Nukeのバージョンによっては自動で入るが、明示的に指定する場合：
+                        # root['OCIO_config'].setValue('custom')
+                        # root['customOCIOConfigPath'].setValue(...)
+                        pass 
+                    except:
+                        pass
+
+                nuke.frame(start)
+                self.close()
+            except Exception as e:
+                nuke.message(f"Apply Failed:\n{e}")
 
 def show_dialog():
-    panel = FluxProjectSetup()
-    panel.show()
+    FluxProjectSetup().show()

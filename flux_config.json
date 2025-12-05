@@ -15,10 +15,11 @@
         "width": 4096,
         "height": 2160,
         "fps": 24.0,
-        "frame_start": 108000,
-        "frame_end": 108240,
+        "frame_start": 1001,
+        "frame_end": 1100,
         "context": "private",
         "project_code": "TMP",
+        "ocio_config_path": "fn-nuke_studio-config-v1.0.0_aces-v1.3_ocio-v2.1",
         "folder_structure": [
             "scripts",
             "renders",
@@ -46,11 +47,11 @@
         "disable_postage_stamp": true,
         "colorspace_overrides": {
             ".exr": "ACES - ACEScg",
-            ".jpg": "sRGB",
-            ".png": "sRGB",
-            ".mov": "sRGB",
-            ".mp4": "sRGB",
-            ".dpx": "Cineon"
+            ".jpg": "Output - sRGB",
+            ".png": "Output - sRGB",
+            ".mov": "Output - Rec.709",
+            ".mp4": "Output - Rec.709",
+            ".dpx": "ACES - ACEScct"
         }
     }
 }
