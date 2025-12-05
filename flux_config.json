@@ -27,7 +27,8 @@
             "renders",
             "plates",
             "ref"
-        ]
+        ],
+        "enforce_script_version_match": true
     },
     "render_settings": {
         "exr": {

@@ -6,15 +6,31 @@ import datetime
 import config
 import validator
 import flux_env
-import traceback # エラー詳細表示用
 
 # ------------------------------------------------------------------------------
-# PATH CALCULATION (Runtime)
+# PATH CALCULATION (Edit-Time Baking)
 # ------------------------------------------------------------------------------
+
+def get_script_version():
+    """
+    Extracts version string (v###) from the current script name.
+    Returns None if no version found or script not saved.
+    """
+    script_name = nuke.root().name()
+    if script_name == 'Root': return None
+    
+    # Simple regex for _v001 or v001 pattern
+    match = re.search(r'[vV](\d+)', os.path.basename(script_name))
+    if match:
+        # Return formatted string "v001"
+        return f"v{int(match.group(1)):03d}"
+    return None
 
 def get_write_path(node=None):
     """
-    Writeノードのファイルパスを計算して返す関数。
+    Calculates the file path for the Write node.
+    Returns a string containing TCL variables (e.g., [getenv FLUX_ROOT])
+    to ensure portability across render farms and OS.
     """
     if node is None:
         try:
@@ -24,15 +40,20 @@ def get_write_path(node=None):
         except:
             return ""
 
+    # Ensure context is available for calculation
     if not os.environ.get('FLUX_PROJECT'):
         flux_env.update_env_from_script()
 
-    root = os.environ.get('FLUX_ROOT', config.BASE_ROOT).replace('\\', '/')
+    # --- 1. Root Abstraction ---
+    root_path = "[getenv FLUX_ROOT]"
+    
+    # --- 2. Context Retrieval ---
     project = os.environ.get('FLUX_PROJECT', 'Unknown')
     shot = os.environ.get('FLUX_SHOT', 'Unknown')
     
+    # Fallback for unsaved scripts
     if project == 'Unknown' or shot == 'Unknown':
-        return f"{root}/_UNSAVED_/{shot}/renders/unknown.exr"
+        return f"{root_path}/_UNSAVED_/{shot}/renders/unknown.exr"
 
     try:
         mode = node['render_mode'].value()
@@ -40,34 +61,60 @@ def get_write_path(node=None):
         raw_lbl = node['render_label'].value()
         use_local_ver = node['use_local_version'].value()
         local_ver_int = int(node['local_version'].value())
-    except Exception as e:
-        # TD Feedback: エラーを握りつぶさず出力する
-        print(f"[Flux Error] Failed to get knob values in get_write_path: {e}")
+    except:
         return ""
 
+    # --- 3. Filename Logic ---
     cat_str = 'elm' if raw_cat == 'element' else ('' if raw_cat == '(Main)' else raw_cat)
     lbl_str = sanitize_text(raw_lbl)
-    ver_str = f"v{local_ver_int:03d}" if use_local_ver else ""
     
+    # VERSION LOGIC CHANGE: Strict Mode check
+    ver_str = ""
+    
+    if config.ENFORCE_VERSION_MATCH and raw_cat == '(Main)':
+        # Strict Mode: Main renders MUST match script version
+        script_ver = get_script_version()
+        if script_ver:
+            ver_str = script_ver
+        else:
+            # Fallback if script has no version (e.g., "shot_test.nk")
+            # We default to local version to avoid breaking renders
+            ver_str = f"v{local_ver_int:03d}"
+    else:
+        # Legacy/Flexible Mode or Non-Main (e.g. Precomps)
+        # Use Local Version if enabled
+        if use_local_ver:
+            ver_str = f"v{local_ver_int:03d}"
+    
+    # Construct Filename Base: shot_variant_label_version
     parts = [shot]
     if cat_str: parts.append(cat_str)
     if lbl_str: parts.append(lbl_str)
     if ver_str: parts.append(ver_str)
     
     filename_base = "_".join(parts)
+    
+    # --- 4. Directory Structure Construction ---
+    # Structure: ROOT / Context / Project / Shot / ...
     user_context = config.DEFAULT_CONTEXT 
-    shot_path = f"{root}/{user_context}/{project}/{shot}"
+    
+    # We construct the base directory using the Abstract Root
+    shot_dir = f"{root_path}/{user_context}/{project}/{shot}"
 
     path = ""
     if mode == 'Master (EXR)':
         ext = "exr"
-        path = f"{shot_path}/renders/{filename_base}/{filename_base}.%04d.{ext}"
+        # Path: .../shot/renders/filename/filename.####.exr
+        path = f"{shot_dir}/renders/{filename_base}/{filename_base}.%04d.{ext}"
+        
     elif mode == 'Review (MOV)':
         ext = "mov"
-        path = f"{shot_path}/renders/dailies/{filename_base}.{ext}"
+        # Path: .../shot/renders/dailies/filename.mov
+        path = f"{shot_dir}/renders/dailies/{filename_base}.{ext}"
+        
     elif mode == 'Temp (JPG)':
         ext = "jpg"
-        temp_root = config.TEMP_WINDOWS if platform.system() == 'Windows' else config.TEMP_LINUX
+        temp_root = "[getenv FLUX_TEMP]" 
         path = f"{temp_root}/nuke_temp/{project}/{shot}/{filename_base}.%04d.{ext}"
 
     return path
@@ -81,29 +128,48 @@ def sanitize_text(text):
 # ------------------------------------------------------------------------------
 
 def update_flux_write(node=None):
+    """
+    Triggered on KnobChanged.
+    Calculates the path string (Edit-Time Baking) and sets it to the File knob.
+    """
     if node is None:
         try: node = nuke.thisNode()
         except: return
 
+    # 1. Update the File Path (The Core Logic Change)
     with node:
         w = nuke.toNode('Write_Internal')
         if w:
-            current_file = w['file'].value()
-            target_expr = "[python {smart_write.get_write_path()}]"
-            if current_file != target_expr:
-                w['file'].setValue(target_expr)
+            new_path_str = get_write_path(node)
+            if w['file'].value() != new_path_str:
+                w['file'].setValue(new_path_str)
 
+    # 2. UI Visibility & Format Logic
     try:
         mode = node['render_mode'].value()
         raw_cat = node['render_variant'].value()
         is_main = (raw_cat == '(Main)')
         
+        # Local Versioning Controls
         k_grp = [node.knob('use_local_version'), node.knob('ver_down'), node.knob('local_version'), node.knob('ver_up')]
+        
+        # Logic: If Strict Mode is ON and it's a Main render, hide local version controls.
+        # The version is driven by the script name.
         if is_main:
-            for k in k_grp: k.setVisible(False)
-            node.knob('script_ver_up').setVisible(True)
-            node.knob('render_now').setLabel("Render (Main)")
+            if config.ENFORCE_VERSION_MATCH:
+                # STRICT: Hide all local controls. Script version is king.
+                for k in k_grp: k.setVisible(False)
+                # Show script version up button as the primary action
+                node.knob('script_ver_up').setVisible(True)
+                node.knob('render_now').setLabel("Render (Script Ver)")
+            else:
+                # FLEXIBLE: Allow toggling local version
+                # But typically main renders shouldn't have local versions anyway
+                for k in k_grp: k.setVisible(False) 
+                node.knob('script_ver_up').setVisible(True)
+                node.knob('render_now').setLabel("Render (Main)")
         else:
+            # Precomps/Elements: Local versioning is allowed/encouraged
             for k in k_grp: k.setVisible(True)
             node.knob('script_ver_up').setVisible(False)
             node.knob('render_now').setLabel("Render (Auto-Inc)" if node['use_local_version'].value() else "Render (Current)")
@@ -115,8 +181,8 @@ def update_flux_write(node=None):
             burn = nuke.toNode('BurnIn_Internal')
             if is_mov and node['use_burnin'].value():
                 burn['disable'].setValue(False)
-                full_path = get_write_path(node)
-                filename = os.path.basename(full_path) if full_path else "Unknown"
+                full_path = w['file'].value()
+                filename = os.path.basename(full_path).split('.')[0] 
                 burn['message'].setValue(f"{filename} | Frame: [frame]")
             else:
                 burn['disable'].setValue(True)
@@ -124,13 +190,11 @@ def update_flux_write(node=None):
         apply_format_settings(node, w, mode)
         
         if 'render_info' in node.knobs():
-            full_path = get_write_path(node)
-            node['render_info'].setValue(f"Target: {os.path.basename(full_path) if full_path else '---'}")
+            resolved_path = nuke.tcl('subst', w['file'].value())
+            node['render_info'].setValue(f"Target: {os.path.basename(resolved_path)}")
 
-    except Exception as e:
-        # TD Feedback: UI更新エラーも出力する
-        print(f"[Flux Error] update_flux_write failed: {e}")
-        # traceback.print_exc() # デバッグ時はこれも有効
+    except Exception:
+        pass
 
 def apply_format_settings(node, w, mode):
     root_working = nuke.root()['workingSpaceLUT'].value() 
@@ -139,17 +203,13 @@ def apply_format_settings(node, w, mode):
             if target and "color_picking" not in target:
                 w['colorspace'].setValue(target)
                 return
-        except: pass # knobがない場合などは無視してOKだが、基本ロジックのエラーは拾うべき
-        
+        except: pass
         for kw in keywords:
-            try:
-                for cs in w['colorspace'].values():
-                    if "color_picking" in cs.lower(): continue
-                    if kw.lower() in cs.lower():
-                        w['colorspace'].setValue(cs)
-                        return
-            except Exception as e:
-                print(f"[Flux Warning] Colorspace matching failed: {e}")
+            for cs in w['colorspace'].values():
+                if "color_picking" in cs.lower(): continue
+                if kw.lower() in cs.lower():
+                    try: w['colorspace'].setValue(cs); return
+                    except: pass
 
     if mode == 'Master (EXR)':
         w['transformType'].setValue('colorspace')
@@ -169,9 +229,7 @@ def apply_format_settings(node, w, mode):
             w['mov64_codec'].setValue(st.get('codec', 'appr'))
             w['mov_prores_codec_profile'].setValue(st.get('prores_profile', 'ProRes 4:4:4:4 XQ 12-bit'))
             w['mov64_quality'].setValue(st.get('quality', 'High'))
-        except Exception as e:
-             print(f"[Flux Warning] MOV codec setup failed: {e}")
-             
+        except: pass
         w['views'].setValue('main'); w['channels'].setValue('rgb')
         try: w['ocioDisplay'].setValue('sRGB - Display'); w['ocioView'].setValue('ACES 1.0 - SDR Video')
         except: pass
@@ -192,14 +250,20 @@ def apply_format_settings(node, w, mode):
 def render_with_auto_increment():
     node = nuke.thisNode()
     
+    # Auto-Increment Logic
     try:
         raw_cat = node['render_variant'].value()
         is_main = (raw_cat == '(Main)')
-        if not is_main and node['use_local_version'].value():
-            ver_k = node['local_version']
-            ver_k.setValue(int(ver_k.value()) + 1)
-    except Exception as e:
-        print(f"[Flux Error] Auto-increment failed: {e}")
+        
+        # If Strict Mode is ON and Main render, we NEVER auto-increment local version.
+        if config.ENFORCE_VERSION_MATCH and is_main:
+            pass # Version comes from script name
+        else:
+            # Precomps or Flexible Mode
+            if not is_main and node['use_local_version'].value():
+                ver_k = node['local_version']
+                ver_k.setValue(int(ver_k.value()) + 1)
+    except: pass
 
     # Validator
     start = int(nuke.root().firstFrame())
@@ -220,10 +284,7 @@ def render_with_auto_increment():
             with node: w_int = nuke.toNode('Write_Internal')
             import notification
             notification.show_notification(w_int, start_time, start, end)
-        except ImportError:
-            print("[Flux Warning] Notification module not found.")
-        except Exception as e:
-            print(f"[Flux Warning] Notification failed: {e}")
+        except: pass
 
     except RuntimeError as e:
         if "Cancelled" not in str(e):
@@ -239,7 +300,7 @@ def local_version_down(node):
     if val > 1: k.setValue(val - 1)
 def script_version_up_wrapper():
     try: import version_up; version_up.run()
-    except Exception as e: nuke.message(f"Version up script error: {e}")
+    except: nuke.message("Version up script error")
 
 def create_flux_write():
     if not flux_env.get_context()['project']:
@@ -296,8 +357,9 @@ def create_flux_write():
     k_ren = nuke.PyScript_Knob('render_now', 'Render', "import smart_write\nsmart_write.render_with_auto_increment()")
     k_ren.setFlag(nuke.STARTLINE)
     group.addKnob(k_ren)
-
-    open_code = "import os, sys, subprocess; n=nuke.thisNode(); w=nuke.toNode('Write_Internal'); p=w['file'].evaluate(); f=os.path.dirname(p); os.startfile(f) if sys.platform=='win32' else subprocess.Popen(['open', f]) if sys.platform=='darwin' else subprocess.Popen(['xdg-open', f])"
+    
+    # Path Revealer
+    open_code = "import os, sys, subprocess; n=nuke.thisNode(); w=nuke.toNode('Write_Internal'); p=nuke.tcl('subst', w['file'].value()); f=os.path.dirname(p); os.startfile(f) if sys.platform=='win32' else subprocess.Popen(['open', f]) if sys.platform=='darwin' else subprocess.Popen(['xdg-open', f])"
     group.addKnob(nuke.PyScript_Knob('reveal', 'Open Folder', open_code))
 
     group.addKnob(nuke.Text_Knob('div3', '')) 
@@ -312,7 +374,5 @@ def create_flux_write():
         out = nuke.createNode('Output')
         burn.setInput(0, inp); w.setInput(0, burn); out.setInput(0, w)
 
-    # TD Feedback: コールバックでもエラーを握りつぶさない
-    # ただし、ロード時の大量エラーを防ぐため、ImportErrorのみpassし、他はprintする
-    group['knobChanged'].setValue("try:\n import smart_write\n smart_write.update_flux_write()\nexcept ImportError: pass\nexcept Exception as e: print(e)")
+    group['knobChanged'].setValue("try:\n import smart_write\n smart_write.update_flux_write()\nexcept: pass")
     update_flux_write(group)
