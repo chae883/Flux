@@ -25,7 +25,8 @@ FILE_EXPLORER_PATH = config.FILE_EXPLORER_PATH
 def send_discord_notification(fields):
     """Builds and sends a GREEN success embed to Discord."""
     if not WEBHOOK_URL:
-        print("Flux Notification: No Webhook URL set.")
+        # TD Feedback: 警告を出すが、処理は止める
+        print("[Flux Info] Discord Notification skipped: Webhook URL not set in environment (FLUX_DISCORD_WEBHOOK).")
         return
 
     embed = {
@@ -41,7 +42,7 @@ def send_discord_notification(fields):
         response = requests.post(WEBHOOK_URL, data=json.dumps(payload), headers=headers, timeout=5)
         response.raise_for_status()
     except Exception as e:
-        print(f"Flux Notification Warning: Discord send failed. {e}")
+        print(f"[Flux Warning] Discord send failed: {e}")
 
 # --- UI Class ---
 
@@ -52,9 +53,6 @@ class FluxNotificationPanel(QMainWindow):
         self.ui.setupUi(self)
         self.Write_node = write_node
         
-        # --- Window Effect Setup ---
-        # Note: Some effects handled in ui_notif_panel.py now (translucency)
-        
         self.op_effect = QGraphicsOpacityEffect(self)
         self.op_effect.setOpacity(0.95)
         self.setGraphicsEffect(self.op_effect)
@@ -64,33 +62,29 @@ class FluxNotificationPanel(QMainWindow):
         self.shadow.setColor(QColor(0, 0, 0, 100))
         self.ui.frame.setGraphicsEffect(self.shadow)
         
-        # Center on Screen
         screen = QApplication.primaryScreen().geometry()
         self.move(int(screen.center().x() - self.width()/2.0), int(screen.center().y() - self.height()/2.0))
         
-        # Connect Signals
         self.ui.pushButton_close.clicked.connect(self.close)
         self.ui.pushButton_folder.clicked.connect(self.open_render_directory)
         self.ui.pushButton_file.clicked.connect(self.open_render_file)
         self.ui.pushButton_CreateRead.clicked.connect(self.create_read_node)
         
-        # Set Data
         script_name = os.path.basename(nuke.root().name())
         self.ui.label_project.setText(script_name)
         self.ui.label_duration.setText(f"Duration: {duration_str}")
 
     def open_render_directory(self):
-        # We need to resolve the path because it might contain [getenv] variables now
         path_raw = nuke.filename(self.Write_node)
         if path_raw:
-            path = nuke.tcl('subst', path_raw) # Resolve TCL vars
+            path = nuke.tcl('subst', path_raw) 
             dir_path = os.path.dirname(path)
             self.open_explorer(dir_path)
 
     def open_render_file(self):
         path_raw = nuke.filename(self.Write_node)
         if path_raw:
-            path = nuke.tcl('subst', path_raw) # Resolve TCL vars
+            path = nuke.tcl('subst', path_raw)
             self.open_player(path)
 
     def open_explorer(self, path):
@@ -115,17 +109,12 @@ class FluxNotificationPanel(QMainWindow):
         file_path_raw = nuke.filename(self.Write_node)
         if not file_path_raw: return
 
-        # For Read node, we prefer the abstract path (farm safe) if possible,
-        # but Nuke Read nodes handle [getenv] natively, so passing the raw value is perfect.
-        # file_path_raw is already the string from the Write node knob.
-        
         read = nuke.createNode("Read")
         read['file'].fromUserText(file_path_raw)
         
         first = int(nuke.root()["first_frame"].getValue())
         last = int(nuke.root()["last_frame"].getValue())
         
-        # Check for frame padding symbols in the raw string
         if "%" in file_path_raw or "#" in file_path_raw:
             read['first'].setValue(first)
             read['last'].setValue(last)
@@ -161,7 +150,6 @@ def show_notification(write_node, start_time, first_frame, last_frame):
 
     script_name = os.path.basename(nuke.root().name())
     
-    # Resolve filename for display in Discord
     render_path_raw = nuke.filename(write_node)
     render_path = nuke.tcl('subst', render_path_raw)
     filename = os.path.basename(render_path)
@@ -174,10 +162,7 @@ def show_notification(write_node, start_time, first_frame, last_frame):
         {"name": "Avg/Frame", "value": avg_time_str, "inline": True}
     ]
     
-    try:
-        send_discord_notification(fields)
-    except:
-        pass
+    send_discord_notification(fields)
 
     def _show_ui():
         global _flux_notification_instances

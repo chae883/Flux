@@ -61,8 +61,8 @@ class FluxLoader(nukescripts.PythonPanel):
                     print(f"[Flux Loader] Loaded assets from cache: {cache_path}")
                     self.update_asset_list()
                     return
-            except:
-                pass
+            except Exception as e:
+                print(f"[Flux Error] Failed to load cache: {e}")
         
         self.scan_disk()
 
@@ -86,7 +86,8 @@ class FluxLoader(nukescripts.PythonPanel):
                                 items.append(f"{f}/{sub}")
                         else:
                             items.append(f)
-                except: pass
+                except Exception as e:
+                    print(f"[Flux Error] Scan failed for {search_path}: {e}")
             self.scanned_data[cat] = sorted(items)
         
         cache_path = self.get_cache_path()
@@ -96,7 +97,7 @@ class FluxLoader(nukescripts.PythonPanel):
                     json.dump(self.scanned_data, f, indent=4)
                 print(f"[Flux Loader] Cache saved to: {cache_path}")
             except Exception as e:
-                print(f"Could not save cache: {e}")
+                print(f"[Flux Error] Could not save cache: {e}")
 
         self.update_asset_list()
 
@@ -136,13 +137,14 @@ class FluxLoader(nukescripts.PythonPanel):
                 r['last'].setValue(end)
                 r['origfirst'].setValue(start)
                 r['origlast'].setValue(end)
-            except: pass 
+            except Exception as e:
+                print(f"[Flux Warning] Frame range parse failed: {e}")
 
         ext = os.path.splitext(rel_path)[1].lower()
         cs_map = config.LOADER_COLORSPACE_MAP
         if ext in cs_map:
             try: r['colorspace'].setValue(cs_map[ext])
-            except: pass
+            except Exception as e: print(f"[Flux Warning] Colorspace set failed: {e}")
 
         if config.LOADER_DISABLE_POSTAGE_STAMP:
             r['postage_stamp'].setValue(False)

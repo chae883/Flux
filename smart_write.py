@@ -6,16 +6,15 @@ import datetime
 import config
 import validator
 import flux_env
+import traceback # エラー詳細表示用
 
 # ------------------------------------------------------------------------------
-# PATH CALCULATION (Edit-Time Baking)
+# PATH CALCULATION (Runtime)
 # ------------------------------------------------------------------------------
 
 def get_write_path(node=None):
     """
-    Calculates the file path for the Write node.
-    Returns a string containing TCL variables (e.g., [getenv FLUX_ROOT])
-    to ensure portability across render farms and OS.
+    Writeノードのファイルパスを計算して返す関数。
     """
     if node is None:
         try:
@@ -25,27 +24,15 @@ def get_write_path(node=None):
         except:
             return ""
 
-    # Ensure context is available for calculation
     if not os.environ.get('FLUX_PROJECT'):
         flux_env.update_env_from_script()
 
-    # --- 1. Root Abstraction (The most critical part for Farms) ---
-    # We use the TCL syntax for the root to allow OS-switching on render nodes.
-    # Note: We do NOT resolve this to D:/ or /mnt/ here. We keep it abstract.
-    root_path = "[getenv FLUX_ROOT]"
-    
-    # --- 2. Context Retrieval ---
-    # We get the current values to build the filename, but we can also
-    # use TCL for folder structure if we want to be very robust.
-    # For this implementation, we will bake the current Project/Shot context
-    # into the path, but keep the Root abstract.
-    
+    root = os.environ.get('FLUX_ROOT', config.BASE_ROOT).replace('\\', '/')
     project = os.environ.get('FLUX_PROJECT', 'Unknown')
     shot = os.environ.get('FLUX_SHOT', 'Unknown')
     
-    # Fallback for unsaved scripts
     if project == 'Unknown' or shot == 'Unknown':
-        return f"{root_path}/_UNSAVED_/{shot}/renders/unknown.exr"
+        return f"{root}/_UNSAVED_/{shot}/renders/unknown.exr"
 
     try:
         mode = node['render_mode'].value()
@@ -53,52 +40,34 @@ def get_write_path(node=None):
         raw_lbl = node['render_label'].value()
         use_local_ver = node['use_local_version'].value()
         local_ver_int = int(node['local_version'].value())
-    except:
+    except Exception as e:
+        # TD Feedback: エラーを握りつぶさず出力する
+        print(f"[Flux Error] Failed to get knob values in get_write_path: {e}")
         return ""
 
-    # --- 3. Filename Logic ---
     cat_str = 'elm' if raw_cat == 'element' else ('' if raw_cat == '(Main)' else raw_cat)
     lbl_str = sanitize_text(raw_lbl)
-    
-    # Version padding v001
     ver_str = f"v{local_ver_int:03d}" if use_local_ver else ""
     
-    # Construct Filename Base: shot_variant_label_version
     parts = [shot]
     if cat_str: parts.append(cat_str)
     if lbl_str: parts.append(lbl_str)
     if ver_str: parts.append(ver_str)
     
     filename_base = "_".join(parts)
-    
-    # --- 4. Directory Structure Construction ---
-    # Structure: ROOT / Context / Project / Shot / ...
     user_context = config.DEFAULT_CONTEXT 
-    
-    # We construct the base directory using the Abstract Root
-    shot_dir = f"{root_path}/{user_context}/{project}/{shot}"
+    shot_path = f"{root}/{user_context}/{project}/{shot}"
 
     path = ""
     if mode == 'Master (EXR)':
         ext = "exr"
-        # Path: .../shot/renders/filename/filename.####.exr
-        path = f"{shot_dir}/renders/{filename_base}/{filename_base}.%04d.{ext}"
-        
+        path = f"{shot_path}/renders/{filename_base}/{filename_base}.%04d.{ext}"
     elif mode == 'Review (MOV)':
         ext = "mov"
-        # Path: .../shot/renders/dailies/filename.mov
-        path = f"{shot_dir}/renders/dailies/{filename_base}.{ext}"
-        
+        path = f"{shot_path}/renders/dailies/{filename_base}.{ext}"
     elif mode == 'Temp (JPG)':
         ext = "jpg"
-        # For Temp, we might want local paths, but for safety we can use the FLUX_TEMP env var if it exists,
-        # otherwise fall back to a hardcoded logic or a separate env var.
-        # To be farm-safe, let's use a TCL var for temp as well if possible, 
-        # or just assume the farm handles standard temp paths.
-        
-        # NOTE: If FLUX_TEMP is not set on the farm, this might fail. 
-        # Ideally, we define FLUX_TEMP in the farm submission environment too.
-        temp_root = "[getenv FLUX_TEMP]" 
+        temp_root = config.TEMP_WINDOWS if platform.system() == 'Windows' else config.TEMP_LINUX
         path = f"{temp_root}/nuke_temp/{project}/{shot}/{filename_base}.%04d.{ext}"
 
     return path
@@ -112,27 +81,18 @@ def sanitize_text(text):
 # ------------------------------------------------------------------------------
 
 def update_flux_write(node=None):
-    """
-    Triggered on KnobChanged.
-    Calculates the path string (Edit-Time Baking) and sets it to the File knob.
-    """
     if node is None:
         try: node = nuke.thisNode()
         except: return
 
-    # 1. Update the File Path (The Core Logic Change)
     with node:
         w = nuke.toNode('Write_Internal')
         if w:
-            # Calculate the safe path string (containing [getenv ...])
-            # This runs Python NOW, not at render time.
-            new_path_str = get_write_path(node)
-            
-            # Update the knob only if it changed to prevent recursive loops/performance hits
-            if w['file'].value() != new_path_str:
-                w['file'].setValue(new_path_str)
+            current_file = w['file'].value()
+            target_expr = "[python {smart_write.get_write_path()}]"
+            if current_file != target_expr:
+                w['file'].setValue(target_expr)
 
-    # 2. UI Visibility & Format Logic (Same as before)
     try:
         mode = node['render_mode'].value()
         raw_cat = node['render_variant'].value()
@@ -155,32 +115,22 @@ def update_flux_write(node=None):
             burn = nuke.toNode('BurnIn_Internal')
             if is_mov and node['use_burnin'].value():
                 burn['disable'].setValue(False)
-                # For visual feedback in Nuke GUI, we evaluate the abstract path to a real path
-                # so the BurnIn node shows something useful, not "[getenv FLUX_ROOT]..."
-                # However, BurnIn needs to render on the farm too. 
-                # Ideally, BurnIn accepts TCL. Let's check.
-                # Yes, BurnIn handles TCL. We can just pass the filename base.
-                
-                # Extract filename for display
-                full_path = w['file'].value()
-                filename = os.path.basename(full_path).split('.')[0] # Rough parsing
-                
-                # We can use TCL in the message to be safe
-                # "[file tail [value parent.Write_Internal.file]]" is the robust Nuke way
+                full_path = get_write_path(node)
+                filename = os.path.basename(full_path) if full_path else "Unknown"
                 burn['message'].setValue(f"{filename} | Frame: [frame]")
             else:
                 burn['disable'].setValue(True)
 
         apply_format_settings(node, w, mode)
         
-        # Update Info Knob (Resolved path for user verification)
         if 'render_info' in node.knobs():
-            # We evaluate the TCL to show the user the *Real* path on their current machine
-            resolved_path = nuke.tcl('subst', w['file'].value())
-            node['render_info'].setValue(f"Target: {os.path.basename(resolved_path)}")
+            full_path = get_write_path(node)
+            node['render_info'].setValue(f"Target: {os.path.basename(full_path) if full_path else '---'}")
 
-    except Exception:
-        pass
+    except Exception as e:
+        # TD Feedback: UI更新エラーも出力する
+        print(f"[Flux Error] update_flux_write failed: {e}")
+        # traceback.print_exc() # デバッグ時はこれも有効
 
 def apply_format_settings(node, w, mode):
     root_working = nuke.root()['workingSpaceLUT'].value() 
@@ -189,13 +139,17 @@ def apply_format_settings(node, w, mode):
             if target and "color_picking" not in target:
                 w['colorspace'].setValue(target)
                 return
-        except: pass
+        except: pass # knobがない場合などは無視してOKだが、基本ロジックのエラーは拾うべき
+        
         for kw in keywords:
-            for cs in w['colorspace'].values():
-                if "color_picking" in cs.lower(): continue
-                if kw.lower() in cs.lower():
-                    try: w['colorspace'].setValue(cs); return
-                    except: pass
+            try:
+                for cs in w['colorspace'].values():
+                    if "color_picking" in cs.lower(): continue
+                    if kw.lower() in cs.lower():
+                        w['colorspace'].setValue(cs)
+                        return
+            except Exception as e:
+                print(f"[Flux Warning] Colorspace matching failed: {e}")
 
     if mode == 'Master (EXR)':
         w['transformType'].setValue('colorspace')
@@ -215,7 +169,9 @@ def apply_format_settings(node, w, mode):
             w['mov64_codec'].setValue(st.get('codec', 'appr'))
             w['mov_prores_codec_profile'].setValue(st.get('prores_profile', 'ProRes 4:4:4:4 XQ 12-bit'))
             w['mov64_quality'].setValue(st.get('quality', 'High'))
-        except: pass
+        except Exception as e:
+             print(f"[Flux Warning] MOV codec setup failed: {e}")
+             
         w['views'].setValue('main'); w['channels'].setValue('rgb')
         try: w['ocioDisplay'].setValue('sRGB - Display'); w['ocioView'].setValue('ACES 1.0 - SDR Video')
         except: pass
@@ -242,7 +198,8 @@ def render_with_auto_increment():
         if not is_main and node['use_local_version'].value():
             ver_k = node['local_version']
             ver_k.setValue(int(ver_k.value()) + 1)
-    except: pass
+    except Exception as e:
+        print(f"[Flux Error] Auto-increment failed: {e}")
 
     # Validator
     start = int(nuke.root().firstFrame())
@@ -257,16 +214,16 @@ def render_with_auto_increment():
         print(f"Flux Render: Frames {start}-{end}")
         start_time = datetime.datetime.now()
         
-        # Execute Render
-        # Because the path is now baked string with TCL vars, nuke.execute works perfectly locally
-        # and on the farm.
         nuke.execute(node, start, end)
         
         try:
             with node: w_int = nuke.toNode('Write_Internal')
             import notification
             notification.show_notification(w_int, start_time, start, end)
-        except: pass
+        except ImportError:
+            print("[Flux Warning] Notification module not found.")
+        except Exception as e:
+            print(f"[Flux Warning] Notification failed: {e}")
 
     except RuntimeError as e:
         if "Cancelled" not in str(e):
@@ -282,7 +239,7 @@ def local_version_down(node):
     if val > 1: k.setValue(val - 1)
 def script_version_up_wrapper():
     try: import version_up; version_up.run()
-    except: nuke.message("Version up script error")
+    except Exception as e: nuke.message(f"Version up script error: {e}")
 
 def create_flux_write():
     if not flux_env.get_context()['project']:
@@ -339,10 +296,8 @@ def create_flux_write():
     k_ren = nuke.PyScript_Knob('render_now', 'Render', "import smart_write\nsmart_write.render_with_auto_increment()")
     k_ren.setFlag(nuke.STARTLINE)
     group.addKnob(k_ren)
-    
-    # Path Revealer
-    # Note: We use nuke.tcl('subst', ...) to resolve the path before opening the folder
-    open_code = "import os, sys, subprocess; n=nuke.thisNode(); w=nuke.toNode('Write_Internal'); p=nuke.tcl('subst', w['file'].value()); f=os.path.dirname(p); os.startfile(f) if sys.platform=='win32' else subprocess.Popen(['open', f]) if sys.platform=='darwin' else subprocess.Popen(['xdg-open', f])"
+
+    open_code = "import os, sys, subprocess; n=nuke.thisNode(); w=nuke.toNode('Write_Internal'); p=w['file'].evaluate(); f=os.path.dirname(p); os.startfile(f) if sys.platform=='win32' else subprocess.Popen(['open', f]) if sys.platform=='darwin' else subprocess.Popen(['xdg-open', f])"
     group.addKnob(nuke.PyScript_Knob('reveal', 'Open Folder', open_code))
 
     group.addKnob(nuke.Text_Knob('div3', '')) 
@@ -357,5 +312,7 @@ def create_flux_write():
         out = nuke.createNode('Output')
         burn.setInput(0, inp); w.setInput(0, burn); out.setInput(0, w)
 
-    group['knobChanged'].setValue("try:\n import smart_write\n smart_write.update_flux_write()\nexcept: pass")
+    # TD Feedback: コールバックでもエラーを握りつぶさない
+    # ただし、ロード時の大量エラーを防ぐため、ImportErrorのみpassし、他はprintする
+    group['knobChanged'].setValue("try:\n import smart_write\n smart_write.update_flux_write()\nexcept ImportError: pass\nexcept Exception as e: print(e)")
     update_flux_write(group)
