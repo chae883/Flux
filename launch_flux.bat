@@ -5,7 +5,7 @@ REM Example: launch_flux.bat TMP 101_010
 
 REM --- 1. Pipeline Configuration ---
 set "FLUX_ROOT=D:\Studio\WIP"
-set "NUKE_PATH=C:\Program Files\Nuke15.0v4\Nuke15.0.exe"
+set "NUKE_PATH=C:\Program Files\Nuke16.0v3\Nuke16.0.exe"
 
 REM --- 2. Set Context ---
 if "%~1"=="" (
