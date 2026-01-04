@@ -256,6 +256,13 @@ def render_with_auto_increment():
                 ver_k.setValue(int(ver_k.value()) + 1)
     except: pass
 
+    # Force path update to ensure we are rendering to the correct version!
+    # This addresses the risk of "v002 script rendering to v001 path" if the node wasn't updated.
+    try:
+        import smart_write
+        smart_write.update_flux_write(node)
+    except: pass
+
     # Validator
     start = int(nuke.root().firstFrame())
     end = int(nuke.root().lastFrame())

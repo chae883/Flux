@@ -1,4 +1,5 @@
 import nuke
+import os
 
 def get_connected_read_nodes(start_node):
     """
@@ -142,8 +143,57 @@ def validate_render(node, start, end):
         if not nuke.ask(warn_msg):
             return False
 
+    # 2-2. バージョン整合性チェック (Version Mismatch)
+    # Smart Writeが更新してくれているはずだが、設定次第ではズレる可能性がある
+    # 特に「Scriptはv002なのに、Renderパスがv001」というケースは過去の別テイクを上書きするリスクがある
+    ok, ver_msg = check_version_mismatch(node)
+    if not ok:
+        if not nuke.ask(f"⚠️ Version Mismatch ⚠️\n\n{ver_msg}\n\nContinue?"):
+            return False
+
     # Nuke NC (Non-commercial) チェック (情報としてコンソールに出すのみ)
     if nuke.env.get('nc'):
         print("[Flux] Running in Nuke Non-commercial mode. Validator check passed.")
 
+    print(f"[Flux Validator] Passed. Rendering: {node.name()}")
     return True
+
+def check_version_mismatch(node):
+    """
+    スクリプトのバージョンと、出力パスのバージョンが食い違っていないか確認
+    """
+    import re
+    
+    script_name = os.path.basename(nuke.root().name())
+    script_ver_match = re.search(r'[vV](\d+)', script_name)
+    
+    if not script_ver_match:
+        return True, "" # スクリプトにバージョンがないならチェック不要
+        
+    script_ver_num = int(script_ver_match.group(1))
+    
+    # Writeパスの確認
+    try:
+        w_int = nuke.toNode('Write_Internal')
+        if not w_int: with node: w_int = nuke.toNode('Write_Internal')
+        
+        path = w_int['file'].value()
+        # パスの中のバージョンを探す (一番最後に見つかった vXXX を採用など)
+        # 通常 .../shot_v001/shot_v001.0001.exr という形
+        # 単純に re.findall で全てのバージョンを取り出して比較
+        
+        vers = re.findall(r'[vV](\d+)', os.path.basename(path))
+        if not vers:
+            return True, "" # パスにバージョンがない
+            
+        render_ver_num = int(vers[-1]) # ファイル名部分のバージョン
+        
+        if script_ver_num != render_ver_num:
+            msg = f"Script Version: v{script_ver_num:03d}\nRender Version: v{render_ver_num:03d}\n\n"
+            msg += "The render version does not match the script version.\n"
+            msg += "This might overwrite a different version's files."
+            return False, msg
+            
+    except: pass
+        
+    return True, ""

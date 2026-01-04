@@ -77,7 +77,9 @@ def publish_current_script():
         
         # Lock the file (Read-Only)
         try:
-            os.chmod(publish_path, 0o444) 
+            # S_IREAD: Owner read, S_IRGRP: Group read, S_IROTH: Others read
+            import stat
+            os.chmod(publish_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
         except Exception as e:
             print(f"Warning: Could not set read-only permission: {e}")
 
