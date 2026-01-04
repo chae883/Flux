@@ -106,6 +106,20 @@ def validate_render(node, start, end):
         nuke.message(f"🚫 Render Error 🚫\n\n{msg}")
         return False
 
+    # 1-1-B. 出力パスチェック (Context Error)
+    try:
+        # Get evaluated path
+        w_int = nuke.toNode('Write_Internal')
+        if not w_int:
+             with node: w_int = nuke.toNode('Write_Internal')
+        
+        if w_int:
+            out_path = w_int['file'].value()
+            if "_ERROR_CONTEXT_NOT_SET_" in out_path or "Unknown" in out_path:
+                 nuke.message("🚫 Render Error 🚫\n\nContext not set!\nPlease use [Flux Project Setup] to set Project/Shot.")
+                 return False
+    except: pass
+
     # 1-2. Readノードチェック (接続されているもの限定)
     ok, msg = check_read_nodes(node)
     if not ok:

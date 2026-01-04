@@ -1,11 +1,32 @@
 import nuke
 import nukescripts
 import config
+import flux_env
+import os
 
 class FluxProjectSetup(nukescripts.PythonPanel):
     def __init__(self):
         super(FluxProjectSetup, self).__init__('Flux Project Setup')
         
+        # --- Section 1: Create / Set Context ---
+        self.addKnob(nuke.Text_Knob('header_create', '<b>Create / Set Context</b>'))
+        
+        self.proj_k = nuke.String_Knob('project_code', 'Project Code')
+        self.proj_k.setTooltip("e.g. TMP, MYPROJ")
+        self.addKnob(self.proj_k)
+        
+        self.shot_k = nuke.String_Knob('shot_name', 'Shot Name')
+        self.shot_k.setTooltip("e.g. shot_010, sh010")
+        self.addKnob(self.shot_k)
+        
+        self.create_btn = nuke.PyScript_Knob('create_structure', 'Create Folder Structure')
+        self.addKnob(self.create_btn)
+
+        self.addKnob(nuke.Text_Knob('div_ctx', ''))
+
+        # --- Section 2: Shot Settings ---
+        self.addKnob(nuke.Text_Knob('header_settings', '<b>Shot Settings</b>'))
+
         self.info_label = nuke.Text_Knob('info_label', '', 'Select a Read Node & Click Get')
         self.addKnob(self.info_label)
         self.addKnob(nuke.Text_Knob('divider0', ''))
@@ -44,6 +65,13 @@ class FluxProjectSetup(nukescripts.PythonPanel):
         self.set_defaults()
 
     def set_defaults(self):
+        # Auto-fill current context if available
+        ctx = flux_env.get_context()
+        if ctx['project']: self.proj_k.setValue(ctx['project'])
+        else: self.proj_k.setValue(getattr(config, 'DEFAULT_PROJECT', 'TMP'))
+        
+        if ctx['shot']: self.shot_k.setValue(ctx['shot'])
+
         # Configから読み込み。万が一変数がない場合は安全なデフォルトを使用
         target_fmt = getattr(config, 'DEFAULT_FORMAT', '4K_DCP')
         def_w = getattr(config, 'DEFAULT_WIDTH', 4096)
@@ -65,6 +93,9 @@ class FluxProjectSetup(nukescripts.PythonPanel):
         self.last_frame_k.setValue(def_end)
 
     def knobChanged(self, knob):
+        if knob == self.create_btn:
+            self.run_create_structure()
+            
         if knob == self.format_menu:
             selected_name = self.format_menu.value()
             for f in self.all_formats:
@@ -102,55 +133,82 @@ class FluxProjectSetup(nukescripts.PythonPanel):
                 self.info_label.setValue(f"Error: {e}")
 
         if knob == self.apply_btn:
-            try:
-                root = nuke.root()
-                w = int(self.width_k.value())
-                h = int(self.height_k.value())
-                selected_fmt_name = self.format_menu.value()
-                
-                # フォーマット設定
-                match_found = False
-                for f in self.all_formats:
-                    if f.name() == selected_fmt_name and f.width() == w and f.height() == h:
-                        match_found = True
-                        break
-                
-                if match_found:
-                     root['format'].setValue(selected_fmt_name)
-                else:
-                    # カスタムフォーマット作成
-                    new_format_str = f"{w} {h} Flux_Project"
-                    nuke.addFormat(new_format_str)
-                    root['format'].setValue('Flux_Project')
-                
-                root['fps'].setValue(self.fps_k.value())
-                
-                start = int(self.first_frame_k.value())
-                end = int(self.last_frame_k.value())
-                root['first_frame'].setValue(start)
-                root['last_frame'].setValue(end)
-                root['lock_range'].setValue(True)
-                
-                # OCIO設定 (Configから)
-                ocio_conf = getattr(config, 'DEFAULT_OCIO_CONFIG', '')
-                if ocio_conf:
-                    # 名前が正確かチェックせずにセットするとエラーになる場合があるが
-                    # ユーザー指定なので信頼してセットする（エラーならコンソールに出る）
-                    try:
-                        # colorManagementをOCIOに
-                        root['colorManagement'].setValue('OCIO')
-                        # OCIO configを設定（custom modeの場合など）
-                        # Nukeのバージョンによっては自動で入るが、明示的に指定する場合：
-                        # root['OCIO_config'].setValue('custom')
-                        # root['customOCIOConfigPath'].setValue(...)
-                        pass 
-                    except:
-                        pass
+            self.run_apply_settings()
 
-                nuke.frame(start)
-                self.close()
-            except Exception as e:
-                nuke.message(f"Apply Failed:\n{e}")
+    def run_create_structure(self):
+        proj = self.proj_k.value()
+        shot = self.shot_k.value()
+        
+        if not proj or not shot:
+            nuke.message("Please enter both Project and Shot names.")
+            return
+
+        try:
+            shot_path = flux_env.create_project_structure(proj, shot)
+            flux_env.set_global_context(project=proj, shot=shot)
+            
+            msg = f"Created Folder Structure:\n{shot_path}\n\n"
+            msg += "Current Session Context Updated."
+            nuke.message(msg)
+            
+            # Save the script to the new location?
+            # Let's ask.
+            script_dir = os.path.join(shot_path, 'scripts', 'work').replace('\\', '/')
+            if not os.path.exists(script_dir): os.makedirs(script_dir)
+            
+            script_name = f"{shot}_v001.nk"
+            script_full_path = os.path.join(script_dir, script_name).replace('\\', '/')
+            
+            if nuke.root().name() == 'Root' or 'Unsaved' in nuke.root().name():
+                if nuke.ask(f"Save current empty script as:\n{script_full_path}?"):
+                    nuke.scriptSaveAs(script_full_path)
+            
+        except Exception as e:
+            nuke.message(f"Failed to create structure:\n{e}")
+
+    def run_apply_settings(self):
+        try:
+            root = nuke.root()
+            w = int(self.width_k.value())
+            h = int(self.height_k.value())
+            selected_fmt_name = self.format_menu.value()
+            
+            # フォーマット設定
+            match_found = False
+            for f in self.all_formats:
+                if f.name() == selected_fmt_name and f.width() == w and f.height() == h:
+                    match_found = True
+                    break
+            
+            if match_found:
+                    root['format'].setValue(selected_fmt_name)
+            else:
+                # カスタムフォーマット作成
+                new_format_str = f"{w} {h} Flux_Project"
+                nuke.addFormat(new_format_str)
+                root['format'].setValue('Flux_Project')
+            
+            root['fps'].setValue(self.fps_k.value())
+            
+            start = int(self.first_frame_k.value())
+            end = int(self.last_frame_k.value())
+            root['first_frame'].setValue(start)
+            root['last_frame'].setValue(end)
+            root['lock_range'].setValue(True)
+            
+            # OCIO設定 (Configから)
+            ocio_conf = getattr(config, 'DEFAULT_OCIO_CONFIG', '')
+            if ocio_conf:
+                try:
+                    # colorManagementをOCIOに
+                    root['colorManagement'].setValue('OCIO')
+                except:
+                    pass 
+            
+            nuke.frame(start)
+            self.close()
+        except Exception as e:
+            nuke.message(f"Apply Failed:\n{e}")
 
 def show_dialog():
     FluxProjectSetup().show()

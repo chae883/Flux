@@ -75,11 +75,17 @@ def publish_current_script():
         # Copy to publish location
         shutil.copy2(script_path, publish_path)
         
+        # Lock the file (Read-Only)
+        try:
+            os.chmod(publish_path, 0o444) 
+        except Exception as e:
+            print(f"Warning: Could not set read-only permission: {e}")
+
         # 4. Success & Post-Publish Actions
-        msg = f"Successfully Published:\n{publish_path}\n\n"
+        msg = f"Successfully Published:\n{publish_path}\n\nFile is now Locked (Read-Only)."
         
         # Optional: Version up the work file automatically
-        if nuke.ask(msg + "Do you want to Version Up your work file now?"):
+        if nuke.ask(msg + "\n\nDo you want to Version Up your work file now?"):
             import version_up
             version_up.run()
             

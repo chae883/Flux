@@ -27,15 +27,20 @@ def get_write_path(node=None):
             if node.name() == 'Write_Internal': node = node.parent()
         except: return ""
 
+    # Ensure context is loaded
     if not os.environ.get('FLUX_PROJECT'):
         flux_env.update_env_from_script()
 
-    root_path = "[getenv FLUX_ROOT]"
-    project = os.environ.get('FLUX_PROJECT', 'Unknown')
-    shot = os.environ.get('FLUX_SHOT', 'Unknown')
+    # Get Context
+    project = os.environ.get('FLUX_PROJECT', '')
+    shot = os.environ.get('FLUX_SHOT', '')
     
-    if project == 'Unknown' or shot == 'Unknown':
-        return f"{root_path}/_UNSAVED_/{shot}/renders/unknown.exr"
+    # Critical Check
+    if not project or not shot:
+        # Return a path that is obviously wrong to trigger Validator, but also safe from overwriting random files
+        return f"[getenv FLUX_ROOT]/_ERROR_CONTEXT_NOT_SET_/renders/error.exr"
+
+    root_path = "[getenv FLUX_ROOT]"
 
     try:
         mode = node['render_mode'].value()
@@ -87,7 +92,14 @@ def get_write_path(node=None):
         path = f"{shot_dir}/renders/dailies/{filename_base}.{ext}"
     elif mode == 'Temp (JPG)':
         ext = "jpg"
-        temp_root = "[getenv FLUX_TEMP]" 
+        # Resolve Temp Path in Python to ensure safety
+        temp_root = config.TEMP_WINDOWS if platform.system() == 'Windows' else config.TEMP_LINUX
+        # Use python-resolved path or env var if temp_root starts with C:/ etc
+        # To match the style of [getenv], we can leave it hardcoded or use FLUX_TEMP if we trust it.
+        # Let's trust FLUX_TEMP if set, otherwise fallback to config.
+        # But for Nuke knob, we should try to use env var for portability if possible.
+        # For now, let's use the resolved logic from config which handles FLUX_TEMP.
+        
         path = f"{temp_root}/nuke_temp/{project}/{shot}/{filename_base}.%04d.{ext}"
 
     return path
@@ -147,9 +159,22 @@ def update_flux_write(node=None):
             burn = nuke.toNode('BurnIn_Internal')
             if is_mov and node['use_burnin'].value():
                 burn['disable'].setValue(False)
-                full_path = w['file'].value()
-                filename = os.path.basename(full_path).split('.')[0] 
-                burn['message'].setValue(f"{filename} | Frame: [frame]")
+                
+                # Get rich metadata
+                ctx = flux_env.get_context()
+                proj = ctx.get('project', 'UNK')
+                shot = ctx.get('shot', 'UNK')
+                today = datetime.datetime.now().strftime("%Y-%m-%d")
+                user = os.environ.get('USERNAME', 'user')
+                
+                burn_msg = f"{proj} | {shot} | {today}\nFrame: [frame]"
+                # burn['message'].setValue(burn_msg)
+                # Text2 needs proper formatting. 
+                # Let's use simple top-left / top-right structure if possible, but Text2 is single block.
+                # Just nice multi-line info.
+                
+                final_msg = f"PROJ: {proj}   SHOT: {shot}\nDATE: {today}   USER: {user}\nFRAME: [frame]"
+                burn['message'].setValue(final_msg)
             else:
                 burn['disable'].setValue(True)
 
