@@ -3,6 +3,7 @@ import os
 import platform
 import re
 import datetime
+import json
 import config
 import validator
 import flux_env
@@ -299,6 +300,146 @@ def script_version_up_wrapper():
     try: import version_up; version_up.run()
     except: nuke.message("Version up script error")
 
+
+def submit_to_dailies(node=None):
+    if node is None:
+        try: node = nuke.thisNode()
+        except: return
+
+    # Determine context and paths
+    ctx = flux_env.get_context()
+    project = ctx.get('project')
+    shot = ctx.get('shot')
+    root = ctx.get('root', config.BASE_ROOT)
+    user_context = config.DEFAULT_CONTEXT
+
+    if not project or not shot:
+        nuke.message("Cannot Submit to Dailies: No valid Flux Context found.")
+        return
+
+    shot_dir = f"{root}/{user_context}/{project}/{shot}"
+    review_dir = os.path.join(shot_dir, "review")
+    hero_dir = os.path.join(review_dir, "hero")
+
+    for d in [review_dir, hero_dir]:
+        if not os.path.exists(d):
+            os.makedirs(d)
+
+    # Get script version
+    script_ver = get_script_version()
+    if not script_ver:
+        script_ver = "v001" # Fallback
+
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    user_str = os.environ.get('USERNAME', 'user')
+
+    base_name = f"{shot}_{script_ver}"
+    dailies_path = os.path.join(review_dir, f"{base_name}.jpg").replace('\\', '/')
+    
+    is_hero = False
+    try:
+        is_hero = node['is_hero'].value()
+    except:
+        pass
+
+    hero_path = ""
+    if is_hero:
+        hero_path = os.path.join(hero_dir, f"{base_name}.jpg").replace('\\', '/')
+
+    curr_frame = int(nuke.frame())
+
+    with nuke.root():
+        group_input = node.input(0)
+        
+        # 1. Slate / Burn-in Text2 node
+        slate = nuke.nodes.Text2()
+        if group_input:
+            slate.setInput(0, group_input)
+        
+        slate['box'].setValue([0, 0, 1920, 80])
+        slate['xjustify'].setValue('center')
+        slate['yjustify'].setValue('bottom')
+        slate['global_font_scale'].setValue(0.4)
+        slate['enable_background'].setValue(True)
+        slate['background_opacity'].setValue(0.6)
+        
+        burn_msg = f"PROJ: {project}   SHOT: {shot}\\nDATE: {date_str}   VER: {script_ver}   USER: {user_str}\\nFRAME: [frame]"
+        slate['message'].setValue(burn_msg)
+
+        # 2. Write Node for Dailies
+        w_dailies = nuke.nodes.Write()
+        w_dailies.setInput(0, slate)
+        w_dailies['file'].setValue(dailies_path)
+        w_dailies['file_type'].setValue('jpeg')
+        # Handle colorspace safely
+        try: w_dailies['colorspace'].setValue('Output - sRGB')
+        except: pass
+        try: w_dailies['_jpeg_quality'].setValue(config.RENDER_JPG.get('quality', 1.0))
+        except: pass
+
+        # 3. Render Dailies
+        err_msg = None
+        try:
+            print(f"Flux: Submitting to Dailies -> {dailies_path}")
+            nuke.execute(w_dailies, curr_frame, curr_frame)
+        except Exception as e:
+            err_msg = f"Dailies Render Error:\n{e}"
+        finally:
+            nuke.delete(w_dailies)
+            nuke.delete(slate)
+
+        if err_msg:
+            nuke.message(err_msg)
+            return
+
+    # Hero logic
+    if is_hero:
+        with nuke.root():
+            w_hero = nuke.nodes.Write()
+            if group_input:
+                w_hero.setInput(0, group_input)
+                
+            w_hero['file'].setValue(hero_path)
+            w_hero['file_type'].setValue('jpeg')
+            try: w_hero['colorspace'].setValue('Output - sRGB')
+            except: pass
+            try: w_hero['_jpeg_quality'].setValue(config.RENDER_JPG.get('quality', 1.0))
+            except: pass
+
+            err_msg = None
+            try:
+                print(f"Flux: Publishing Hero Frame -> {hero_path}")
+                nuke.execute(w_hero, curr_frame, curr_frame)
+                
+                # Update shot_spec.json
+                json_path = os.path.join(shot_dir, "shot_spec.json").replace('\\', '/')
+                spec = {}
+                if os.path.exists(json_path):
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        try:
+                            spec = json.load(f)
+                        except json.JSONDecodeError:
+                            pass
+                
+                spec['hero_frame_path'] = hero_path
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(spec, f, indent=4)
+                    
+            except Exception as e:
+                err_msg = f"Hero Render Error:\n{e}"
+            finally:
+                nuke.delete(w_hero)
+                
+            if err_msg:
+                nuke.message(err_msg)
+                return
+                
+    success_msg = f"Successfully submitted to Dailies:\n{dailies_path}"
+    if is_hero:
+        success_msg += f"\n\nPublish as Hero Frame Saved:\n{hero_path}"
+    nuke.message(success_msg)
+
+
 def create_flux_write():
     if not flux_env.get_context()['project']:
         flux_env.update_env_from_script()
@@ -359,6 +500,18 @@ def create_flux_write():
     group.addKnob(nuke.PyScript_Knob('reveal', 'Open Folder', open_code))
 
     group.addKnob(nuke.Text_Knob('div3', '')) 
+    
+    k_hero = nuke.Boolean_Knob('is_hero', 'Publish as Hero Frame')
+    k_hero.setFlag(nuke.STARTLINE)
+    k_hero.setValue(False)
+    group.addKnob(k_hero)
+    
+    k_dailies = nuke.PyScript_Knob('submit_dailies', 'Submit to Dailies', "import smart_write\nsmart_write.submit_to_dailies(nuke.thisNode())")
+    k_dailies.clearFlag(nuke.STARTLINE)
+    group.addKnob(k_dailies)
+    
+    group.addKnob(nuke.Text_Knob('div4', ''))
+    
     k_info = nuke.Text_Knob('render_info', 'Current Settings:')
     k_info.setValue('Initializing...')
     group.addKnob(k_info)
