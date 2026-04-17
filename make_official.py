@@ -66,7 +66,7 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
         script_dir = os.path.join(shot_dir, 'scripts', 'work')
         
         file_name = f"{shot_name}_comp_v001.nk"
-        full_path = os.path.join(script_dir, file_name).replace('\\', '/')
+        full_path = config.normalize_path(os.path.join(script_dir, file_name))
         
         return project_root, shot_dir, script_dir, full_path
 
@@ -93,7 +93,7 @@ class FluxMakeOfficial(nukescripts.PythonPanel):
             if not os.path.exists(script_dir):
                 os.makedirs(script_dir)
 
-            save_path = full_path.replace('\\', '/')
+            save_path = config.normalize_path(full_path)
             if os.path.exists(save_path):
                 if not nuke.ask(f"File already exists:\n{save_path}\n\nOverwrite?"):
                     return

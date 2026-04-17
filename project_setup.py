@@ -153,11 +153,11 @@ class FluxProjectSetup(nukescripts.PythonPanel):
             
             # Save the script to the new location?
             # Let's ask.
-            script_dir = os.path.join(shot_path, 'scripts', 'work').replace('\\', '/')
+            script_dir = config.normalize_path(os.path.join(shot_path, 'scripts', 'work'))
             if not os.path.exists(script_dir): os.makedirs(script_dir)
             
             script_name = f"{shot}_v001.nk"
-            script_full_path = os.path.join(script_dir, script_name).replace('\\', '/')
+            script_full_path = config.normalize_path(os.path.join(script_dir, script_name))
             
             if nuke.root().name() == 'Root' or 'Unsaved' in nuke.root().name():
                 if nuke.ask(f"Save current empty script as:\n{script_full_path}?"):

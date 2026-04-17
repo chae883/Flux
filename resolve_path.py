@@ -19,7 +19,7 @@ def convert_to_env_absolute():
         return
 
     # パス区切り文字の統一
-    flux_root = flux_root.replace('\\', '/')
+    flux_root = config.normalize_path(flux_root)
     
     nodes = nuke.selectedNodes()
     if not nodes:
@@ -40,7 +40,7 @@ def convert_to_env_absolute():
                 continue
                 
             # パスの正規化
-            normalized_path = current_path.replace('\\', '/')
+            normalized_path = config.normalize_path(current_path)
             
             # 既に環境変数を使っているかチェック
             if '[getenv FLUX_ROOT]' in normalized_path:

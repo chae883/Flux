@@ -41,10 +41,10 @@ def publish_current_script():
         # If not in 'work', assume we are in 'scripts' root or somewhere else.
         # Try to find a sibling 'published' folder.
         parent_dir = os.path.dirname(current_dir)
-        publish_dir = os.path.join(parent_dir, 'published').replace('\\', '/')
+        publish_dir = config.normalize_path(os.path.join(parent_dir, 'published'))
     else:
         parent_dir = os.path.dirname(current_dir)
-        publish_dir = os.path.join(parent_dir, 'published').replace('\\', '/')
+        publish_dir = config.normalize_path(os.path.join(parent_dir, 'published'))
 
     if not os.path.exists(publish_dir):
         try:
@@ -61,7 +61,7 @@ def publish_current_script():
     # This creates a traceable link.
     
     publish_filename = f"{name}_published{ext}"
-    publish_path = os.path.join(publish_dir, publish_filename).replace('\\', '/')
+    publish_path = config.normalize_path(os.path.join(publish_dir, publish_filename))
 
     # 3. Publish Action
     if os.path.exists(publish_path):

@@ -2,6 +2,13 @@ import json
 import os
 import nuke
 
+def normalize_path(path):
+    """Normalize file paths to use forward slashes for cross-platform compatibility."""
+    if not path:
+        return path
+    return path.replace('\\', '/')
+    
+
 class FluxConfig:
     _instance = None
     
@@ -34,11 +41,11 @@ class FluxConfig:
     def get_path(self, key, default=None):
         env_key = f"FLUX_{key.upper()}"
         if env_key in os.environ:
-            return os.environ[env_key].replace('\\', '/')
+            return normalize_path(os.environ[env_key])
         
         raw_path = self.data.get('paths', {}).get(key, default)
         if raw_path:
-            raw_path = raw_path.replace('\\', '/')
+            raw_path = normalize_path(raw_path)
             return os.path.expandvars(raw_path)
         return default
 

@@ -23,7 +23,7 @@ def create_project_structure(project, shot):
     context = config.DEFAULT_CONTEXT
     
     # Construct shot root: e.g., D:/Studio/WIP/private/ProjectName/ShotName
-    shot_path = os.path.join(base_root, context, project, shot).replace('\\', '/')
+    shot_path = config.normalize_path(os.path.join(base_root, context, project, shot))
     
     created_paths = []
     
@@ -34,13 +34,13 @@ def create_project_structure(project, shot):
 
     # Create sub-folders from config
     for folder in config.FOLDER_STRUCTURE:
-        full_path = os.path.join(shot_path, folder).replace('\\', '/')
+        full_path = config.normalize_path(os.path.join(shot_path, folder))
         if not os.path.exists(full_path):
             os.makedirs(full_path)
             created_paths.append(full_path)
             
     # Always ensure _config exists
-    config_dir = os.path.join(base_root, "_config").replace('\\', '/')
+    config_dir = config.normalize_path(os.path.join(base_root, "_config"))
     if not os.path.exists(config_dir):
         os.makedirs(config_dir)
 
@@ -61,11 +61,11 @@ def update_env_from_script():
     if script_path == 'Root':
         return
 
-    path = script_path.replace('\\', '/')
+    path = config.normalize_path(script_path)
     
     # Determine Root
     # Try to see if path starts with known config.BASE_ROOT
-    known_root = config.BASE_ROOT.replace('\\', '/')
+    known_root = config.normalize_path(config.BASE_ROOT)
     
     if path.startswith(known_root):
         os.environ[ENV_KEY_ROOT] = known_root

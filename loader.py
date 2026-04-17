@@ -15,7 +15,7 @@ class FluxLoader(nukescripts.PythonPanel):
         ctx = flux_env.get_context()
         self.shot_root = ""
         if ctx['project'] and ctx['shot']:
-            self.shot_root = os.path.join(ctx['root'], config.DEFAULT_CONTEXT, ctx['project'], ctx['shot']).replace('\\', '/')
+            self.shot_root = config.normalize_path(os.path.join(ctx['root'], config.DEFAULT_CONTEXT, ctx['project'], ctx['shot']))
         
         if not os.path.exists(self.shot_root):
              self.shot_root = self.determine_shot_root_fallback()
@@ -44,7 +44,7 @@ class FluxLoader(nukescripts.PythonPanel):
     def determine_shot_root_fallback(self):
         script_path = nuke.root().name()
         if script_path == 'Root': return None
-        return os.path.dirname(os.path.dirname(script_path)).replace('\\', '/')
+        return config.normalize_path(os.path.dirname(os.path.dirname(script_path)))
 
     def get_cache_path(self):
         if self.shot_root:
@@ -125,7 +125,7 @@ class FluxLoader(nukescripts.PythonPanel):
         if not match: return
         rel_path = match.group(1) 
         range_str = match.group(3)
-        full_path = os.path.join(self.shot_root, cat, rel_path).replace('\\', '/')
+        full_path = config.normalize_path(os.path.join(self.shot_root, cat, rel_path))
         
         r = nuke.createNode('Read')
         r['file'].fromUserText(full_path)
